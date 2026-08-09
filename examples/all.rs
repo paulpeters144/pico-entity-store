@@ -9,6 +9,10 @@ fn main() {
     let store = EntityStore::new();
     store.add(Dwarf { name: "Gimli".into() }, &[]).unwrap();
     store.add(Dwarf { name: "Thorin".into() }, &[]).unwrap();
-    // prints: collected 2 dwarfs
-    println!("collected {} dwarfs", store.all::<Dwarf>().count());
+    store.add(Dwarf { name: "Balin".into() }, &[]).unwrap();
+
+    let mut names: Vec<String> = Vec::new();
+    store.all::<Dwarf>().for_each(|d| names.push(d.name.clone()));
+    // prints: party: [Gimli, Thorin, Balin]
+    println!("party: {:?}", names);
 }

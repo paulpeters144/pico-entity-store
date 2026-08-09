@@ -19,10 +19,7 @@ struct Shield {
 }
 
 fn dwarf(name: &str, health: i32) -> Dwarf {
-    Dwarf {
-        name: name.into(),
-        health,
-    }
+    Dwarf { name: name.into(), health }
 }
 
 #[test]
@@ -38,8 +35,8 @@ fn add_increases_count() {
 #[test]
 fn add_returns_new_entity_id() {
     let store = EntityStore::new();
-    let id0 = store.add(dwarf("Gimli", 100), &[]).unwrap();
-    let id1 = store.add(dwarf("Thorin", 150), &[]).unwrap();
+    let id0 = store.add(dwarf("Gimli", 100), &[]).unwrap().id();
+    let id1 = store.add(dwarf("Thorin", 150), &[]).unwrap().id();
     assert_eq!(id0, 0);
     assert_eq!(id1, 1);
 }
@@ -76,18 +73,6 @@ fn refmut_deref_mut_mutates_entity_in_store() {
 }
 
 #[test]
-fn first_mut_returns_mutable_access() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-    {
-        let mut d = store.first_mut::<Dwarf>().unwrap();
-        d.name = "Mutated".into();
-    }
-    let d = store.first::<Dwarf>().unwrap();
-    assert_eq!(d.name, "Mutated");
-}
-
-#[test]
 fn get_by_id_mut_returns_mutable_access() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
@@ -103,25 +88,9 @@ fn get_by_id_mut_returns_mutable_access() {
 #[test]
 fn each_mut_callback_mutates_all_entities() {
     let store = EntityStore::new();
-    store
-        .add(
-            Axe {
-                damage: 10,
-                durability: 50,
-            },
-            &[],
-        )
-        .unwrap();
-    store
-        .add(
-            Axe {
-                damage: 20,
-                durability: 60,
-            },
-            &[],
-        )
-        .unwrap();
-    store.each_mut::<Axe, _>(|a| {
+    store.add(Axe { damage: 10, durability: 50 }, &[]).unwrap();
+    store.add(Axe { damage: 20, durability: 60 }, &[]).unwrap();
+    store.all_mut().for_each(|a: &mut Axe| {
         a.durability -= 1;
         a.damage += 5;
     });
@@ -140,7 +109,7 @@ fn update_updates_single_entity_by_entity_ref() {
     let eref = ref_d.entity_ref();
     drop(ref_d);
 
-    let updated = store.update::<Dwarf, _>(&eref, |d| {
+    let updated = store.update(&eref, |d: &mut Dwarf| {
         d.health -= 10;
     });
     assert!(updated);
@@ -157,7 +126,7 @@ fn update_returns_false_for_wrong_type() {
     let eref = ref_d.entity_ref();
     drop(ref_d);
 
-    assert!(!store.update::<Axe, _>(&eref, |_| {}));
+    assert!(!store.update(&eref, |_: &mut Axe| {}));
 }
 
 #[test]
@@ -165,33 +134,13 @@ fn each_callback_receives_all_entities_of_type() {
     let store = EntityStore::new();
     store.add(dwarf("A", 10), &[]).unwrap();
     store.add(dwarf("B", 20), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 5,
-                durability: 5,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 5, durability: 5 }, &[]).unwrap();
 
     let mut names = Vec::new();
-    store.each::<Dwarf, _>(|d| names.push(d.name.clone()));
+    store.all::<Dwarf>().for_each(|d| names.push(d.name.clone()));
     assert_eq!(names.len(), 2);
     assert!(names.contains(&"A".to_string()));
     assert!(names.contains(&"B".to_string()));
-}
-
-#[test]
-fn all_iterator_yields_all_entities() {
-    let store = EntityStore::new();
-    store.add(dwarf("A", 10), &[]).unwrap();
-    store.add(dwarf("B", 20), &[]).unwrap();
-
-    let dwarves: Vec<_> = store.all::<Dwarf>().collect();
-    assert_eq!(dwarves.len(), 2);
-    assert_eq!(dwarves[0].name, "A");
-    assert_eq!(dwarves[1].name, "B");
 }
 
 #[test]
@@ -219,15 +168,7 @@ fn get_by_id_returns_none_for_wrong_id() {
 fn attach_child_links_parent_child() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
 
     let d = store.first::<Dwarf>().unwrap();
     let a = store.first::<Axe>().unwrap();
@@ -261,20 +202,12 @@ fn attach_child_via_refmut_parent() {
 #[test]
 fn add_new_entity_with_children_links_them() {
     let store = EntityStore::new();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
 
     let a1 = store.first::<Axe>().unwrap();
-    let parent_id = store.add(dwarf("Parent", 100), &children![a1]).unwrap();
+    let parent_ref = store.add(dwarf("Parent", 100), &children![a1]).unwrap();
 
-    let d = store.get_by_id::<Dwarf>(parent_id).unwrap();
+    let d = store.get_by_id::<Dwarf>(parent_ref.id()).unwrap();
     let children = store.children(&d);
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].id(), store.first::<Axe>().unwrap().id());
@@ -284,15 +217,7 @@ fn add_new_entity_with_children_links_them() {
 fn parent_returns_correct_entity_ref() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
 
     let d = store.first::<Dwarf>().unwrap();
     let a = store.first::<Axe>().unwrap();
@@ -304,52 +229,11 @@ fn parent_returns_correct_entity_ref() {
 }
 
 #[test]
-fn attach_already_parented_child_returns_error() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store.add(dwarf("Thorin", 150), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
-
-    let d1 = store.get_by_id::<Dwarf>(0).unwrap();
-    let a = store.get_by_id::<Axe>(2).unwrap();
-    store.add(d1, &children![a]).unwrap();
-
-    let d2 = store.get_by_id::<Dwarf>(1).unwrap();
-    let a = store.get_by_id::<Axe>(2).unwrap();
-    let err = store.add(d2, &children![a]).unwrap_err();
-    assert_eq!(err, PicoError::AlreadyHasParent);
-}
-
-#[test]
 fn children_returns_correct_list() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
-    store
-        .add(
-            Axe {
-                damage: 60,
-                durability: 90,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
+    store.add(Axe { damage: 60, durability: 90 }, &[]).unwrap();
 
     let a1 = store.get_by_id::<Axe>(1).unwrap();
     let d = store.first::<Dwarf>().unwrap();
@@ -451,15 +335,7 @@ fn remove_skips_already_dead_entities() {
 fn clear_resets_everything() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
     assert_eq!(store.count(), 2);
     store.clear();
     assert_eq!(store.count(), 0);
@@ -492,19 +368,6 @@ fn is_alive_correct_before_and_after_remove() {
 }
 
 #[test]
-fn resolve_returns_some_for_correct_type() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-    let d = store.first::<Dwarf>().unwrap();
-    let eref = d.entity_ref();
-    drop(d);
-
-    let resolved = store.resolve::<Dwarf>(&eref);
-    assert!(resolved.is_some());
-    assert_eq!(resolved.unwrap().name, "Gimli");
-}
-
-#[test]
 fn resolve_returns_none_for_wrong_type() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
@@ -512,23 +375,7 @@ fn resolve_returns_none_for_wrong_type() {
     let eref = d.entity_ref();
     drop(d);
 
-    assert!(store.resolve::<Axe>(&eref).is_none());
-}
-
-#[test]
-fn resolve_mut_returns_some_for_correct_type() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-    let d = store.first::<Dwarf>().unwrap();
-    let eref = d.entity_ref();
-    drop(d);
-
-    {
-        let mut resolved = store.resolve_mut::<Dwarf>(&eref).unwrap();
-        resolved.health = 42;
-    }
-    let d = store.first::<Dwarf>().unwrap();
-    assert_eq!(d.health, 42);
+    assert!(store.get_by_id::<Axe>(eref.id()).is_none());
 }
 
 #[test]
@@ -539,7 +386,7 @@ fn resolve_mut_returns_none_for_wrong_type() {
     let eref = d.entity_ref();
     drop(d);
 
-    assert!(store.resolve_mut::<Axe>(&eref).is_none());
+    assert!(store.get_by_id_mut::<Axe>(eref.id()).is_none());
 }
 
 #[test]
@@ -558,9 +405,7 @@ fn concurrent_reads() {
 
     let store = Arc::new(EntityStore::new());
     for i in 0..100 {
-        store
-            .add(dwarf(&format!("Dwarf{}", i), 100 + i), &[])
-            .unwrap();
+        store.add(dwarf(&format!("Dwarf{}", i), 100 + i), &[]).unwrap();
     }
 
     let mut handles = vec![];
@@ -602,15 +447,7 @@ fn usage_example_from_plan() {
     let store = EntityStore::new();
 
     store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
 
     {
         let d1 = store.first::<Dwarf>().unwrap();
@@ -623,12 +460,12 @@ fn usage_example_from_plan() {
 
     let d = store.first::<Dwarf>().unwrap();
     for child_ref in store.children(&d) {
-        if let Some(a) = store.resolve::<Axe>(&child_ref) {
+        if let Some(a) = store.get_by_id::<Axe>(child_ref.id()) {
             assert_eq!(a.damage, 45);
         }
     }
 
-    store.each::<Axe, _>(|a| {
+    store.all::<Axe>().for_each(|a| {
         assert_eq!(a.durability, 80);
     });
 
@@ -638,62 +475,10 @@ fn usage_example_from_plan() {
 }
 
 #[test]
-fn add_children_links_multiple() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 10,
-                durability: 50,
-            },
-            &[],
-        )
-        .unwrap();
-    store
-        .add(
-            Axe {
-                damage: 20,
-                durability: 60,
-            },
-            &[],
-        )
-        .unwrap();
-    store
-        .add(
-            Axe {
-                damage: 30,
-                durability: 70,
-            },
-            &[],
-        )
-        .unwrap();
-
-    let parent = store.first::<Dwarf>().unwrap();
-    let c1 = store.get_by_id::<Axe>(1).unwrap();
-    let c2 = store.get_by_id::<Axe>(2).unwrap();
-    let c3 = store.get_by_id::<Axe>(3).unwrap();
-
-    store.add(parent, &children![c1, c2, c3]).unwrap();
-
-    let d = store.first::<Dwarf>().unwrap();
-    let children = store.children(&d);
-    assert_eq!(children.len(), 3);
-}
-
-#[test]
 fn add_children_heterogeneous() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 10,
-                durability: 50,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 10, durability: 50 }, &[]).unwrap();
     store.add(Shield { defense: 80 }, &[]).unwrap();
 
     let parent = store.first::<Dwarf>().unwrap();
@@ -708,9 +493,9 @@ fn add_children_heterogeneous() {
     let child_types: Vec<_> = children
         .iter()
         .map(|c| {
-            if store.resolve::<Axe>(c).is_some() {
+            if store.get_by_id::<Axe>(c.id()).is_some() {
                 "Axe"
-            } else if store.resolve::<Shield>(c).is_some() {
+            } else if store.get_by_id::<Shield>(c.id()).is_some() {
                 "Shield"
             } else {
                 "Unknown"
@@ -722,88 +507,12 @@ fn add_children_heterogeneous() {
 }
 
 #[test]
-fn add_children_parent_returns_correct() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 10,
-                durability: 50,
-            },
-            &[],
-        )
-        .unwrap();
-    store
-        .add(
-            Axe {
-                damage: 20,
-                durability: 60,
-            },
-            &[],
-        )
-        .unwrap();
-
-    let parent_id = store.first::<Dwarf>().unwrap().id();
-    let parent = store.get_by_id::<Dwarf>(parent_id).unwrap();
-    let c1 = store.get_by_id::<Axe>(1).unwrap();
-    let c2 = store.get_by_id::<Axe>(2).unwrap();
-
-    store.add(parent, &children![c1, c2]).unwrap();
-
-    let c1 = store.get_by_id::<Axe>(1).unwrap();
-    let c2 = store.get_by_id::<Axe>(2).unwrap();
-    assert_eq!(store.parent(&c1).unwrap().id(), parent_id);
-    assert_eq!(store.parent(&c2).unwrap().id(), parent_id);
-}
-
-#[test]
-fn add_children_single_child() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
-
-    let d = store.first::<Dwarf>().unwrap();
-    let a = store.first::<Axe>().unwrap();
-    store.add(d, &children![a]).unwrap();
-
-    let d = store.first::<Dwarf>().unwrap();
-    let children = store.children(&d);
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].id(), store.first::<Axe>().unwrap().id());
-}
-
-#[test]
 fn add_children_already_parented_error() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
     store.add(dwarf("Thorin", 150), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
-    store
-        .add(
-            Axe {
-                damage: 60,
-                durability: 90,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
+    store.add(Axe { damage: 60, durability: 90 }, &[]).unwrap();
 
     let d1 = store.get_by_id::<Dwarf>(0).unwrap();
     let a1 = store.get_by_id::<Axe>(2).unwrap();
@@ -823,27 +532,19 @@ fn add_children_already_parented_error() {
 fn add_children_dead_entity_error() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
 
     let dead_axe = store.first::<Axe>().unwrap().entity_ref();
     store.remove(&[dead_axe]);
 
     // Creating a new entity with a dead child fails and creates nothing.
-    let err = store.add(dwarf("Thorin", 150), &[dead_axe]).unwrap_err();
+    let err = store.add(dwarf("Thorin", 150), &[ChildSource::Existing(dead_axe)]).unwrap_err();
     assert_eq!(err, PicoError::EntityNotAlive);
     assert_eq!(store.count(), 1);
 
     // Attaching a dead child to an existing entity fails too.
     let parent = store.first::<Dwarf>().unwrap();
-    let err = store.add(parent, &[dead_axe]).unwrap_err();
+    let err = store.add(parent, &[ChildSource::Existing(dead_axe)]).unwrap_err();
     assert_eq!(err, PicoError::EntityNotAlive);
 }
 
@@ -852,24 +553,8 @@ fn add_children_all_or_nothing() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();
     store.add(dwarf("Thorin", 150), &[]).unwrap();
-    store
-        .add(
-            Axe {
-                damage: 45,
-                durability: 80,
-            },
-            &[],
-        )
-        .unwrap();
-    store
-        .add(
-            Axe {
-                damage: 60,
-                durability: 90,
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(Axe { damage: 45, durability: 80 }, &[]).unwrap();
+    store.add(Axe { damage: 60, durability: 90 }, &[]).unwrap();
 
     let d1 = store.get_by_id::<Dwarf>(0).unwrap();
     let a2 = store.get_by_id::<Axe>(3).unwrap();
@@ -894,30 +579,9 @@ fn add_children_all_or_nothing() {
     // nothing either.
     let count_before = store.count();
     let a2_again = store.get_by_id::<Axe>(3).unwrap();
-    let err = store
-        .add(dwarf("Newbie", 1), &children![a2_again])
-        .unwrap_err();
+    let err = store.add(dwarf("Newbie", 1), &children![a2_again]).unwrap_err();
     assert_eq!(err, PicoError::AlreadyHasParent);
     assert_eq!(store.count(), count_before);
-}
-
-#[test]
-fn swap_remove_preserves_displaced_data() {
-    let store = EntityStore::new();
-    store.add(dwarf("A", 0x11111111), &[]).unwrap();
-    store.add(dwarf("B", 0x22222222), &[]).unwrap();
-    store.add(dwarf("C", 0x33333333), &[]).unwrap();
-
-    let e0 = store.get_by_id::<Dwarf>(0).unwrap().entity_ref();
-    store.remove(&[e0]);
-
-    let b = store.get_by_id::<Dwarf>(1).unwrap();
-    assert_eq!(b.name, "B");
-    assert_eq!(b.health, 0x22222222);
-    let c = store.get_by_id::<Dwarf>(2).unwrap();
-    assert_eq!(c.name, "C");
-    assert_eq!(c.health, 0x33333333);
-    assert_eq!(store.count(), 2);
 }
 
 #[test]
@@ -1023,15 +687,7 @@ struct OverAligned {
 fn over_aligned_types_stay_aligned_through_add_iterate_remove() {
     let store = EntityStore::new();
     for i in 0..8u32 {
-        store
-            .add(
-                OverAligned {
-                    tag: i,
-                    payload: [i as u8; 40],
-                },
-                &[],
-            )
-            .unwrap();
+        store.add(OverAligned { tag: i, payload: [i as u8; 40] }, &[]).unwrap();
     }
 
     for r in store.all::<OverAligned>() {
@@ -1045,15 +701,7 @@ fn over_aligned_types_stay_aligned_through_add_iterate_remove() {
         assert_eq!(r.payload, [r.tag as u8; 40]);
     }
 
-    store
-        .add(
-            OverAligned {
-                tag: 9,
-                payload: [9; 40],
-            },
-            &[],
-        )
-        .unwrap();
+    store.add(OverAligned { tag: 9, payload: [9; 40] }, &[]).unwrap();
     for r in store.all::<OverAligned>() {
         assert_eq!(r.payload, [r.tag as u8; 40]);
     }
@@ -1072,7 +720,7 @@ fn zero_sized_components_work() {
     assert_eq!(store.count(), 3);
 
     let mut n = 0;
-    store.each::<ZeroSized, _>(|_| n += 1);
+    store.all::<ZeroSized>().for_each(|_| n += 1);
     assert_eq!(n, 3);
 
     let e1 = store.get_by_id::<ZeroSized>(1).unwrap().entity_ref();
@@ -1082,4 +730,219 @@ fn zero_sized_components_work() {
 
     let ids: Vec<u64> = store.all::<ZeroSized>().map(|r| r.id()).collect();
     assert_eq!(ids, vec![0, 2]);
+}
+
+// ── Empty store queries ─────────────────────────────────────────────────
+
+#[test]
+fn first_returns_none_on_empty_store() {
+    let store = EntityStore::new();
+    assert!(store.first::<Dwarf>().is_none());
+}
+
+#[test]
+fn first_mut_returns_none_on_empty_store() {
+    let store = EntityStore::new();
+    assert!(store.first_mut::<Dwarf>().is_none());
+}
+
+#[test]
+fn all_yields_zero_items_on_empty_store() {
+    let store = EntityStore::new();
+    assert_eq!(store.all::<Dwarf>().count(), 0);
+}
+
+#[test]
+fn all_mut_yields_zero_items_on_empty_store() {
+    let store = EntityStore::new();
+    assert_eq!(store.all_mut::<Dwarf>().count(), 0);
+}
+
+// ── update error cases ──────────────────────────────────────────────────
+
+#[test]
+fn update_returns_false_for_dead_entity() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let eref = store.first::<Dwarf>().unwrap().entity_ref();
+    store.remove(&[eref]);
+    assert!(!store.update::<Dwarf, _>(&eref, |d| d.health -= 10));
+}
+
+// ── Hierarchy “none” cases ──────────────────────────────────────────────
+
+#[test]
+fn parent_returns_none_for_root_entity() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let d = store.first::<Dwarf>().unwrap();
+    assert!(store.parent(&d).is_none());
+}
+
+#[test]
+fn children_returns_empty_for_leaf_entity() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let d = store.first::<Dwarf>().unwrap();
+    assert!(store.children(&d).is_empty());
+}
+
+#[test]
+fn descendants_returns_empty_for_leaf_entity() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let d = store.first::<Dwarf>().unwrap();
+    assert!(store.descendants(&d).is_empty());
+}
+
+// ── RefMut guard API ────────────────────────────────────────────────────
+
+#[test]
+fn refmut_id_returns_correct_value() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let d = store.first_mut::<Dwarf>().unwrap();
+    assert_eq!(d.id(), 0);
+}
+
+#[test]
+fn refmut_entity_ref_returns_correct_value() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let d = store.first_mut::<Dwarf>().unwrap();
+    let eref = d.entity_ref();
+    assert_eq!(eref.id(), 0);
+}
+
+#[test]
+fn refmut_immutable_deref_reads_correctly() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let d = store.first_mut::<Dwarf>().unwrap();
+    assert_eq!(d.name, "Gimli");
+    assert_eq!(d.health, 100);
+}
+
+// ── EntityRef trait impls ───────────────────────────────────────────────
+
+#[test]
+fn entity_ref_clone_produces_equal_copy() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let eref = store.first::<Dwarf>().unwrap().entity_ref();
+    let cloned = eref;
+    assert_eq!(cloned.id(), eref.id());
+}
+
+#[test]
+fn entity_ref_copy_allows_reuse_after_pass_by_value() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let eref = store.first::<Dwarf>().unwrap().entity_ref();
+    let copy = eref;
+    assert_eq!(copy.id(), 0);
+    assert_eq!(eref.id(), 0);
+}
+
+#[test]
+fn entity_ref_eq_and_hash_work_in_hashset() {
+    use std::collections::HashSet;
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    store.add(dwarf("Thorin", 150), &[]).unwrap();
+    let e0 = store.get_by_id::<Dwarf>(0).unwrap().entity_ref();
+    let e1 = store.get_by_id::<Dwarf>(1).unwrap().entity_ref();
+    let mut set = HashSet::new();
+    set.insert(e0);
+    set.insert(e1);
+    set.insert(e0);
+    assert_eq!(set.len(), 2);
+}
+
+#[test]
+fn entity_ref_debug_contains_id() {
+    let store = EntityStore::new();
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    let eref = store.first::<Dwarf>().unwrap().entity_ref();
+    let debug = format!("{:?}", eref);
+    assert!(debug.contains("0"), "debug output should contain entity id: {debug}");
+}
+
+// ── PicoError Display ───────────────────────────────────────────────────
+
+#[test]
+fn pico_error_display_formats_correctly() {
+    assert_eq!(PicoError::TypeNotRegistered.to_string(), "type not registered");
+    assert_eq!(PicoError::AlreadyHasParent.to_string(), "entity already has a parent");
+    assert_eq!(PicoError::EntityNotAlive.to_string(), "entity is not alive");
+}
+
+// ── Iterator size_hint / count ──────────────────────────────────────────
+
+#[test]
+fn all_iter_size_hint_and_count_match() {
+    let store = EntityStore::new();
+    for i in 0..5 {
+        store.add(dwarf(&format!("D{}", i), i), &[]).unwrap();
+    }
+    let iter = store.all::<Dwarf>();
+    assert_eq!(iter.size_hint(), (5, Some(5)));
+    assert_eq!(iter.count(), 5);
+}
+
+#[test]
+fn all_mut_iter_size_hint_and_count_match() {
+    let store = EntityStore::new();
+    for i in 0..5 {
+        store.add(dwarf(&format!("D{}", i), i), &[]).unwrap();
+    }
+    let iter = store.all_mut::<Dwarf>();
+    assert_eq!(iter.size_hint(), (5, Some(5)));
+    assert_eq!(iter.count(), 5);
+}
+
+// ── Default trait ───────────────────────────────────────────────────────
+
+#[test]
+fn default_creates_empty_store() {
+    let store = EntityStore::default();
+    assert_eq!(store.count(), 0);
+    store.add(dwarf("Gimli", 100), &[]).unwrap();
+    assert_eq!(store.count(), 1);
+}
+
+// ── Swap-remove interaction with read queries ───────────────────────────
+
+#[test]
+fn first_returns_swapped_entity_after_removing_first() {
+    let store = EntityStore::new();
+    store.add(dwarf("D0", 0), &[]).unwrap();
+    store.add(dwarf("D1", 1), &[]).unwrap();
+    store.add(dwarf("D2", 2), &[]).unwrap();
+
+    let e0 = store.get_by_id::<Dwarf>(0).unwrap().entity_ref();
+    store.remove(&[e0]);
+
+    let d = store.first::<Dwarf>().unwrap();
+    assert_eq!(d.name, "D2");
+    assert_eq!(d.health, 2);
+}
+
+#[test]
+fn all_iter_reflects_state_after_removal() {
+    let store = EntityStore::new();
+    for i in 0..5 {
+        store.add(dwarf(&format!("D{}", i), i), &[]).unwrap();
+    }
+    let e1 = store.get_by_id::<Dwarf>(1).unwrap().entity_ref();
+    let e3 = store.get_by_id::<Dwarf>(3).unwrap().entity_ref();
+    store.remove(&[e1, e3]);
+
+    let items: Vec<_> = store.all::<Dwarf>().map(|d| (d.id(), d.name.clone(), d.health)).collect();
+    assert_eq!(items.len(), 3);
+    assert_eq!(store.count(), 3);
+    for (id, name, health) in &items {
+        assert_eq!(name, &format!("D{id}"));
+        assert_eq!(*health, *id as i32);
+    }
 }

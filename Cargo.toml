@@ -10,8 +10,7 @@ keywords = ["ecs", "entity", "component", "store", "game"]
 categories = ["game-development", "data-structures"]
 
 [dependencies]
-parking_lot = "0.12"
-
+parking_lot = { version = "0.12", features = ["hardware-lock-elision"] }
 [dev-dependencies]
 criterion = "0.5"
 

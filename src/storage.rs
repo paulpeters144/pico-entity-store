@@ -47,10 +47,7 @@ impl<T: 'static> TypedStorage<T> {
 impl<T: 'static> TypedStorage<T> {
     pub(crate) fn push(&mut self, entity: T, entity_id: u64) -> usize {
         let slot = self.slots.len();
-        self.slots.push(EntitySlot {
-            data: entity,
-            entity_id,
-        });
+        self.slots.push(EntitySlot { data: entity, entity_id });
         slot
     }
 }

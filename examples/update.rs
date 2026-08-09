@@ -10,7 +10,7 @@ fn main() {
     store.add(Dwarf { health: 100 }, &[]).unwrap();
 
     let eref = store.first::<Dwarf>().unwrap().entity_ref();
-    store.update::<Dwarf, _>(&eref, |d| d.health -= 10);
+    store.update(&eref, |d: &mut Dwarf| d.health -= 10);
     // prints: update health: 90
     println!("update health: {}", store.first::<Dwarf>().unwrap().health);
 }

@@ -1,6 +1,7 @@
 use pico_entity_store::prelude::*;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Dwarf {
     name: String,
 }

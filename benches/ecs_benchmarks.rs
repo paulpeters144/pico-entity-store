@@ -25,43 +25,16 @@ struct OtherBenchmarkEntity {
 fn add_entities_mixed(store: &EntityStore, n: usize) {
     for i in 0..n {
         if i % 2 == 0 {
-            store
-                .add(
-                    BenchmarkEntity {
-                        x: i as u64,
-                        y: 0,
-                        z: 0,
-                    },
-                    &[],
-                )
-                .unwrap();
+            store.add(BenchmarkEntity { x: i as u64, y: 0, z: 0 }, &[]).unwrap();
         } else {
-            store
-                .add(
-                    OtherBenchmarkEntity {
-                        x: i as u64,
-                        y: 0,
-                        z: 0,
-                    },
-                    &[],
-                )
-                .unwrap();
+            store.add(OtherBenchmarkEntity { x: i as u64, y: 0, z: 0 }, &[]).unwrap();
         }
     }
 }
 
 fn add_entities_single(store: &EntityStore, n: usize) {
     for i in 0..n {
-        store
-            .add(
-                BenchmarkEntity {
-                    x: i as u64,
-                    y: 0,
-                    z: 0,
-                },
-                &[],
-            )
-            .unwrap();
+        store.add(BenchmarkEntity { x: i as u64, y: 0, z: 0 }, &[]).unwrap();
     }
 }
 
@@ -74,50 +47,37 @@ fn bench_add(c: &mut Criterion) {
     group.sample_size(SAMPLE_SIZE);
 
     for &entity_count in ENTITY_COUNTS {
-        group.bench_with_input(
-            BenchmarkId::new("bulk", entity_count),
-            &entity_count,
-            |b, &n| {
-                b.iter_batched(
-                    || (),
-                    |_| {
-                        let store = EntityStore::new();
-                        add_entities_mixed(&store, n);
-                        store
-                    },
-                    BatchSize::SmallInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("bulk", entity_count), &entity_count, |b, &n| {
+            b.iter_batched(
+                || (),
+                |_| {
+                    let store = EntityStore::new();
+                    add_entities_mixed(&store, n);
+                    store
+                },
+                BatchSize::SmallInput,
+            );
+        });
     }
 
     for &entity_count in ENTITY_COUNTS {
-        group.bench_with_input(
-            BenchmarkId::new("batch", entity_count),
-            &entity_count,
-            |b, &n| {
-                b.iter_batched(
-                    || {
-                        let entities: Vec<BenchmarkEntity> = (0..n)
-                            .map(|i| BenchmarkEntity {
-                                x: i as u64,
-                                y: 0,
-                                z: 0,
-                            })
-                            .collect();
-                        entities
-                    },
-                    |entities| {
-                        let store = EntityStore::new();
-                        for entity in entities {
-                            store.add(entity, &[]).unwrap();
-                        }
-                        store
-                    },
-                    BatchSize::SmallInput,
-                );
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("batch", entity_count), &entity_count, |b, &n| {
+            b.iter_batched(
+                || {
+                    let entities: Vec<BenchmarkEntity> =
+                        (0..n).map(|i| BenchmarkEntity { x: i as u64, y: 0, z: 0 }).collect();
+                    entities
+                },
+                |entities| {
+                    let store = EntityStore::new();
+                    for entity in entities {
+                        store.add(entity, &[]).unwrap();
+                    }
+                    store
+                },
+                BatchSize::SmallInput,
+            );
+        });
     }
 
     group.finish();
@@ -145,9 +105,7 @@ fn bench_add_marginal(c: &mut Criterion) {
             add_entities_single(&store, 10_000);
             let start = std::time::Instant::now();
             for i in 0..iters {
-                store
-                    .add(BenchmarkEntity { x: i, y: 0, z: 0 }, &[])
-                    .unwrap();
+                store.add(BenchmarkEntity { x: i, y: 0, z: 0 }, &[]).unwrap();
             }
             start.elapsed()
         });
@@ -167,11 +125,7 @@ fn bench_get_by_id(c: &mut Criterion) {
     for &entity_count in ENTITY_COUNTS {
         let store = EntityStore::new();
         add_entities_mixed(&store, entity_count);
-        let last_id = store
-            .all::<BenchmarkEntity>()
-            .last()
-            .expect("should have entities")
-            .id();
+        let last_id = store.all::<BenchmarkEntity>().last().expect("should have entities").id();
 
         group.bench_with_input(
             BenchmarkId::new("single_lookup", entity_count),
@@ -179,34 +133,6 @@ fn bench_get_by_id(c: &mut Criterion) {
             |b, &id| {
                 b.iter(|| {
                     black_box(store.get_by_id::<BenchmarkEntity>(black_box(id)));
-                });
-            },
-        );
-    }
-
-    group.finish();
-}
-
-// ── each/iterate (single type, matches C# All scope) ─────────────────────
-
-fn bench_each(c: &mut Criterion) {
-    let mut group = c.benchmark_group("each");
-    group.warm_up_time(std::time::Duration::from_secs(1));
-    group.measurement_time(std::time::Duration::from_secs(1));
-    group.sample_size(SAMPLE_SIZE);
-
-    for &entity_count in ENTITY_COUNTS {
-        let store = EntityStore::new();
-        add_entities_single(&store, entity_count);
-
-        group.bench_with_input(
-            BenchmarkId::new("iterate", entity_count),
-            &entity_count,
-            |b, _n| {
-                b.iter(|| {
-                    store.each::<BenchmarkEntity, _>(|e| {
-                        black_box(e);
-                    });
                 });
             },
         );
@@ -253,15 +179,11 @@ fn bench_first(c: &mut Criterion) {
         let store = EntityStore::new();
         add_entities_mixed(&store, entity_count);
 
-        group.bench_with_input(
-            BenchmarkId::new("first", entity_count),
-            &entity_count,
-            |b, _n| {
-                b.iter(|| {
-                    black_box(store.first::<BenchmarkEntity>());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("first", entity_count), &entity_count, |b, _n| {
+            b.iter(|| {
+                black_box(store.first::<BenchmarkEntity>());
+            });
+        });
     }
 
     group.finish();
@@ -277,16 +199,7 @@ fn bench_descendants(c: &mut Criterion) {
 
     let store = EntityStore::new();
     for i in 0..=DESCENDANT_CHAIN_DEPTH {
-        store
-            .add(
-                BenchmarkEntity {
-                    x: i as u64,
-                    y: 0,
-                    z: 0,
-                },
-                &[],
-            )
-            .unwrap();
+        store.add(BenchmarkEntity { x: i as u64, y: 0, z: 0 }, &[]).unwrap();
     }
     for i in 0..DESCENDANT_CHAIN_DEPTH as u64 {
         let parent = store.get_by_id::<BenchmarkEntity>(i).unwrap();
@@ -356,27 +269,13 @@ fn bench_remove_with_children(c: &mut Criterion) {
                 let store = EntityStore::new();
                 let mut parent_erefs = Vec::new();
                 for _ in 0..BATCH_REMOVE_COUNT {
-                    let p_id = store
-                        .add(BenchmarkEntity { x: 0, y: 0, z: 0 }, &[])
-                        .unwrap();
-                    parent_erefs.push(
-                        store
-                            .get_by_id::<BenchmarkEntity>(p_id)
-                            .unwrap()
-                            .entity_ref(),
-                    );
-                    let child_erefs: Vec<EntityRef> = (0..10)
-                        .map(|_| {
-                            let cid = store
-                                .add(BenchmarkEntity { x: 0, y: 0, z: 0 }, &[])
-                                .unwrap();
-                            store
-                                .get_by_id::<BenchmarkEntity>(cid)
-                                .unwrap()
-                                .entity_ref()
-                        })
+                    let p_ref = store.add(BenchmarkEntity { x: 0, y: 0, z: 0 }, &[]).unwrap();
+                    parent_erefs.push(p_ref);
+                    let child_erefs: Vec<ChildSource> = (0..10)
+                        .map(|_| store.add(BenchmarkEntity { x: 0, y: 0, z: 0 }, &[]).unwrap())
+                        .map(ChildSource::Existing)
                         .collect();
-                    let parent = store.get_by_id::<BenchmarkEntity>(p_id).unwrap();
+                    let parent = store.get_by_id::<BenchmarkEntity>(p_ref.id()).unwrap();
                     store.add(parent, &child_erefs).unwrap();
                 }
                 (store, parent_erefs)
@@ -397,7 +296,6 @@ criterion_group!(
     bench_add,
     bench_add_marginal,
     bench_get_by_id,
-    bench_each,
     bench_all,
     bench_first,
     bench_descendants,

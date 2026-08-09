@@ -1,6 +1,6 @@
+use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
 
 use crate::entity_ref::EntityRef;
@@ -15,7 +15,6 @@ use crate::store::StoreInner;
 pub(crate) struct SharedGuard<'a>(Arc<RwLockReadGuard<'a, StoreInner>>);
 
 impl<'a> SharedGuard<'a> {
-    #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) fn new(guard: RwLockReadGuard<'a, StoreInner>) -> Self {
         Self(Arc::new(guard))
     }
@@ -27,7 +26,7 @@ impl<'a> SharedGuard<'a> {
 
 /// Internal guard ownership for [`Ref`].
 ///
-/// Single-entity lookups (`first`, `get_by_id`, `resolve`) own their read lock
+/// Single-entity lookups (`first`, `get_by_id`) own their read lock
 /// directly. Bulk iteration via [`EntityStore::all`](crate::store::EntityStore::all)
 /// shares one read lock across every yielded reference through an `Arc`.
 pub(crate) enum Guard<'a> {
@@ -77,10 +76,7 @@ impl<T: 'static> Ref<'_, T> {
 
     /// Converts this reference into a type-erased [`EntityRef`].
     pub fn entity_ref(&self) -> EntityRef {
-        EntityRef {
-            id: self.id,
-            type_id: std::any::TypeId::of::<T>(),
-        }
+        EntityRef { id: self.id, type_id: std::any::TypeId::of::<T>() }
     }
 }
 
@@ -124,9 +120,6 @@ impl<T: 'static> RefMut<'_, T> {
 
     /// Converts this reference into a type-erased [`EntityRef`].
     pub fn entity_ref(&self) -> EntityRef {
-        EntityRef {
-            id: self.id,
-            type_id: std::any::TypeId::of::<T>(),
-        }
+        EntityRef { id: self.id, type_id: std::any::TypeId::of::<T>() }
     }
 }

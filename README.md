@@ -8,11 +8,11 @@ A tiny, fast entity-component store for Rust. Store typed components per entity,
 
 ## Features
 
-- **Type-erased storage** — components are stored in contiguous byte buffers, one per type
-- **Read & write queries** — `first`, `get_by_id`, `each`, `all` (read) and `first_mut`, `get_by_id_mut`, `each_mut`, `update` (write)
+- **Type-erased storage** — components are stored in contiguous `Vec<T>` buffers, one per type
+- **Read & write queries** — `first`, `get_by_id`, `all` (read) and `first_mut`, `get_by_id_mut`, `all_mut`, `update` (write)
 - **Parent-child hierarchies** — `add` with `children!` macro, `children`, `descendants`, with recursive removal
 - **Thread-safe** — the store is protected by an `RwLock`; readers don't block each other
-- **Zero dependencies** — only `criterion` for benchmarks (dev-only)
+- **Minimal dependencies** — only `parking_lot` for the `RwLock`; `criterion` for benchmarks (dev-only)
 
 ## Quick Start
 
@@ -51,7 +51,7 @@ fn main() {
     }
 
     // iterate all Velocities mutably
-    store.each_mut::<Velocity, _>(|v| {
+    store.all_mut::<Velocity>().for_each(|v| {
         v.dx *= 2.0;
     });
 }
@@ -81,18 +81,18 @@ assert_eq!(store.count(), 1);
 ### `EntityStore::add`
 
 Creates a new entity from a component value, or attaches children to an existing entity.
-Returns the entity's numeric id on success. All validation in a single call is all-or-nothing.
+Returns an `EntityRef` for the entity on success. All validation in a single call is all-or-nothing.
 
 **Create a new entity:**
 
 ```rust
-let id: u64 = store.add(Position { x: 1.0, y: 2.0 }, &[]).unwrap();
+let entity_ref = store.add(Position { x: 1.0, y: 2.0 }, &[]).unwrap();
 ```
 
 **Create a new entity with children:**
 
 ```rust
-let parent_id = store
+let parent_ref = store
     .add(Parent { name: "root".into() }, &[child_a.entity_ref(), child_b.entity_ref()])
     .unwrap();
 ```
@@ -147,29 +147,9 @@ The returned `Ref<T>` dereferences to `&T`. The read lock is held for the lifeti
 Returns a read guard to the entity with the given numeric id, or `None` if the id is out of range, the entity is dead, or the type doesn't match.
 
 ```rust
-let entity_id = store.add(Health { hp: 100 }, &[]).unwrap();
-let health = store.get_by_id::<Health>(entity_id).unwrap();
+let entity_ref = store.add(Health { hp: 100 }, &[]).unwrap();
+let health = store.get_by_id::<Health>(entity_ref.id()).unwrap();
 assert_eq!(health.hp, 100);
-```
-
-### `EntityStore::resolve`
-
-Resolves a type-erased `EntityRef` back to a typed read guard. Returns `None` if the entity is dead or the type doesn't match.
-
-```rust
-let eref = store.first::<Position>().unwrap().entity_ref();
-let pos = store.resolve::<Position>(&eref).unwrap();
-```
-
-### `EntityStore::each`
-
-Calls a closure with a shared reference to every live entity of type `T`.
-A single read lock is held for the duration of the iteration.
-
-```rust
-store.each::<Position, _>(|pos| {
-    println!("({}, {})", pos.x, pos.y);
-});
 ```
 
 ### `EntityStore::all`
@@ -204,20 +184,10 @@ The returned `RefMut<T>` dereferences to `&mut T`. The write lock is held for th
 Returns a write guard to the entity with the given numeric id, or `None` if the id is out of range, the entity is dead, or the type doesn't match.
 
 ```rust
-let id = store.add(Health { hp: 100 }, &[]).unwrap();
-if let Some(mut health) = store.get_by_id_mut::<Health>(id) {
+let eref = store.add(Health { hp: 100 }, &[]).unwrap();
+if let Some(mut health) = store.get_by_id_mut::<Health>(eref.id()) {
     health.hp -= 10;
 }
-```
-
-### `EntityStore::resolve_mut`
-
-Resolves a type-erased `EntityRef` back to a typed write guard. Returns `None` if the entity is dead or the type doesn't match.
-
-```rust
-let eref = store.first::<Position>().unwrap().entity_ref();
-let pos = store.resolve_mut::<Position>(&eref).unwrap();
-pos.x = 10.0;
 ```
 
 ### `EntityStore::update`
@@ -227,19 +197,19 @@ Returns `true` if the entity was alive and the types matched.
 
 ```rust
 let eref = store.first::<Health>().unwrap().entity_ref();
-let ok = store.update::<Health, _>(&eref, |h| {
+let ok = store.update(&eref, |h: &mut Health| {
     h.hp = h.hp.saturating_sub(10);
 });
 assert!(ok);
 ```
 
-### `EntityStore::each_mut`
+### `EntityStore::all_mut`
 
-Calls a closure with a mutable reference to every live entity of type `T`.
-A single write lock is held for the duration of the iteration.
+Returns an iterator that yields `&mut T` mutable references for all live entities of type `T`.
+A single write lock is held for the entire iteration.
 
 ```rust
-store.each_mut::<Velocity, _>(|v| {
+store.all_mut::<Velocity>().for_each(|v| {
     v.dx *= 0.9;
     v.dy += 0.1;
 });
@@ -252,7 +222,7 @@ Returns the type-erased `EntityRef` of the parent of the given entity, or `None`
 ```rust
 let child = store.first::<Child>().unwrap();
 if let Some(parent_eref) = store.parent(&child) {
-    let parent = store.resolve::<Parent>(&parent_eref).unwrap();
+    let parent = store.get_by_id::<Parent>(parent_eref.id()).unwrap();
     println!("parent: {}", parent.name);
 }
 ```
@@ -264,7 +234,7 @@ Returns a `Vec<EntityRef>` of the direct children of the entity.
 ```rust
 let parent = store.first::<Parent>().unwrap();
 for child_eref in store.children(&parent) {
-    if let Some(child) = store.resolve::<Child>(&child_eref) {
+    if let Some(child) = store.get_by_id::<Child>(child_eref.id()) {
         println!("child id: {}", child.id());
     }
 }
@@ -293,8 +263,8 @@ assert!(!store.is_alive(&guard));
 
 ### `children!` macro
 
-Collects `EntityRef`s from `Ref`/`RefMut` handles and returns a `[EntityRef; N]` array.
-Guards are dropped before the array is returned to avoid deadlocks when `add` acquires a write lock.
+Collects `ChildSource`s from `Ref`/`RefMut` handles or raw component values and returns a `[ChildSource; N]` array.
+Guards are consumed when converting to `ChildSource`, releasing their locks before `add` acquires a write lock.
 
 ```rust
 let parent = store.first::<Parent>().unwrap();
@@ -314,11 +284,15 @@ store.add(warrior, &children![axe, shield]).unwrap();
 
 ### `EntityRef`
 
-A type-erased, lightweight entity handle that is `Clone`, `Copy`, `PartialEq`, `Eq`, and `Hash`.
-Used to reference entities without holding a lock.
+A type-erased, lightweight entity handle that is `Clone`, `Copy`, `Debug`, `PartialEq`, `Eq`, and `Hash`.
+Used to reference entities without holding a lock. Returned directly by `add` or created from a `Ref`/`RefMut` via `entity_ref()`.
 
 ```rust
-let eref: EntityRef = store.first::<Position>().unwrap().entity_ref();
+// returned directly by add
+let eref: EntityRef = store.add(Position { x: 0.0, y: 0.0 }, &[]).unwrap();
+
+// or obtained from a guard
+let eref = store.first::<Position>().unwrap().entity_ref();
 let id: u64 = eref.id();
 ```
 

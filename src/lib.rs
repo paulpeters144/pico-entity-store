@@ -23,7 +23,7 @@
 //!     println!("({}, {})", pos.x, pos.y);
 //! }
 //!
-//! store.each_mut::<Velocity, _>(|v| {
+//! store.all_mut::<Velocity>().for_each(|v| {
 //!     v.dx *= 2.0;
 //! });
 //! ```
@@ -38,5 +38,5 @@ pub mod prelude {
     pub use crate::children;
     pub use crate::entity_ref::EntityRef;
     pub use crate::refs::{Ref, RefMut};
-    pub use crate::store::{EntityStore, PicoError};
+    pub use crate::store::{ChildSource, EntityStore, IntoChild, PicoError};
 }

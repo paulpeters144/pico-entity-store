@@ -1,19 +1,28 @@
 use pico_entity_store::prelude::*;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Dwarf {
     name: String,
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct Axe {
     kind: String,
 }
 
 fn main() {
     let store = EntityStore::new();
-    let a = store.get_by_id::<Axe>(store.add(Axe { kind: "Axe".into() }, &[]).unwrap()).unwrap();
-    store.add(Dwarf { name: "Gimli".into() }, &children![a]).unwrap();
+
+    let dwarf = Dwarf { name: "Gimli".into() };
+    let axe = Axe { kind: "Axe".into() };
+
+    store.add(dwarf, &children![axe]).unwrap();
+
+    let guard = store.first::<Dwarf>().unwrap();
+
     // prints: 1 descendant
-    println!("{} descendant", store.descendants(&store.first::<Dwarf>().unwrap()).len());
+    let len = store.descendants(&guard).len();
+    println!("{} descendant", len);
 }
