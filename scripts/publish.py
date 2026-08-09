@@ -104,7 +104,7 @@ def main() -> None:
         print("aborted")
         sys.exit(1)
 
-    result = _run(["cargo", "publish"])
+    result = _run(["cargo", "publish", "--allow-dirty"])
     if result.returncode != 0:
         sys.exit(result.returncode)
 
