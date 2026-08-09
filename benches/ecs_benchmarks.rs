@@ -258,6 +258,29 @@ fn bench_remove(c: &mut Criterion) {
     group.finish();
 }
 
+// ── all_slice (zero-copy view — matches C# AllType semantics) ──────────────
+
+fn bench_all_slice(c: &mut Criterion) {
+    let mut group = c.benchmark_group("all_slice");
+    group.sample_size(SAMPLE_SIZE);
+
+    for &entity_count in ENTITY_COUNTS {
+        let store = EntityStore::new();
+        add_entities_mixed(&store, entity_count);
+
+        group.bench_with_input(
+            BenchmarkId::new("view", entity_count),
+            &entity_count,
+            |b, _n| {
+                b.iter(|| {
+                    black_box(store.all_slice::<BenchmarkEntity>());
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 // ── remove_with_children (100 parents × 10 children, BFS removal) ────────
 
 fn bench_remove_with_children(c: &mut Criterion) {
@@ -305,6 +328,7 @@ criterion_group!(
     bench_get_by_id,
     bench_each,
     bench_all,
+    bench_all_slice,
     bench_first,
     bench_descendants,
     bench_remove,

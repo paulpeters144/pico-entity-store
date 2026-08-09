@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::prelude::*;
     use crate::children;
+    use crate::prelude::*;
 
     #[derive(Clone)]
     struct Dwarf {
@@ -775,7 +775,9 @@ mod tests {
         let d2 = store.get_by_id::<Dwarf>(1).unwrap();
         let a1_again = store.get_by_id::<Axe>(2).unwrap();
         let a2 = store.get_by_id::<Axe>(3).unwrap();
-        let err = store.add_children(d2, &children![a1_again, a2]).unwrap_err();
+        let err = store
+            .add_children(d2, &children![a1_again, a2])
+            .unwrap_err();
         assert_eq!(err, PicoError::AlreadyHasParent);
 
         let d2 = store.get_by_id::<Dwarf>(1).unwrap();
@@ -837,7 +839,9 @@ mod tests {
         let d2 = store.get_by_id::<Dwarf>(1).unwrap();
         let a1 = store.get_by_id::<Axe>(2).unwrap();
         let a2_again = store.get_by_id::<Axe>(3).unwrap();
-        let err = store.add_children(d2, &children![a1, a2_again]).unwrap_err();
+        let err = store
+            .add_children(d2, &children![a1, a2_again])
+            .unwrap_err();
         assert_eq!(err, PicoError::AlreadyHasParent);
 
         let d2 = store.get_by_id::<Dwarf>(1).unwrap();
@@ -845,5 +849,184 @@ mod tests {
 
         let a1 = store.get_by_id::<Axe>(2).unwrap();
         assert!(store.parent(&a1).is_none());
+    }
+
+    #[test]
+    fn swap_remove_preserves_displaced_data() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "A".into(),
+            health: 0x11111111,
+        });
+        store.add(&Dwarf {
+            name: "B".into(),
+            health: 0x22222222,
+        });
+        store.add(&Dwarf {
+            name: "C".into(),
+            health: 0x33333333,
+        });
+
+        assert!(store.remove_by_id(0));
+
+        let b = store.get_by_id::<Dwarf>(1).unwrap();
+        assert_eq!(b.name, "B");
+        assert_eq!(b.health, 0x22222222);
+        let c = store.get_by_id::<Dwarf>(2).unwrap();
+        assert_eq!(c.name, "C");
+        assert_eq!(c.health, 0x33333333);
+        assert_eq!(store.count(), 2);
+    }
+
+    #[test]
+    fn swap_remove_middle_preserves_all_data() {
+        let store = EntityStore::new();
+        for i in 0..10 {
+            store.add(&Dwarf {
+                name: format!("D{}", i),
+                health: i * 7,
+            });
+        }
+
+        assert!(store.remove_by_id(3));
+
+        for i in 0..10_i32 {
+            if i == 3 {
+                continue;
+            }
+            let d = store.get_by_id::<Dwarf>(i as u64).unwrap();
+            assert_eq!(d.name, format!("D{}", i));
+            assert_eq!(d.health, i * 7);
+        }
+        assert_eq!(store.count(), 9);
+    }
+
+    #[test]
+    fn swap_remove_keeps_ids_consistent_after_removal() {
+        let store = EntityStore::new();
+        for i in 0..5 {
+            store.add(&Dwarf {
+                name: format!("D{}", i),
+                health: i,
+            });
+        }
+
+        assert!(store.remove_by_id(0));
+        assert!(store.remove_by_id(2));
+
+        let mut ids: Vec<u64> = store.all::<Dwarf>().map(|r| r.id()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec![1, 3, 4]);
+
+        for id in ids {
+            let d = store.get_by_id::<Dwarf>(id).unwrap();
+            assert_eq!(d.id(), id);
+        }
+        assert_eq!(store.count(), 3);
+    }
+
+    #[test]
+    fn remove_with_children_preserves_sibling_entities() {
+        let store = EntityStore::new();
+        for i in 0..6 {
+            store.add(&Dwarf {
+                name: format!("D{}", i),
+                health: i,
+            });
+        }
+        store.add_children_ids(0, &[1, 2]).unwrap();
+        store.add_children_ids(3, &[4, 5]).unwrap();
+
+        assert!(store.remove_by_id(0));
+        assert_eq!(store.count(), 3);
+
+        for i in 3..6_i32 {
+            let d = store.get_by_id::<Dwarf>(i as u64).unwrap();
+            assert_eq!(d.name, format!("D{}", i));
+            assert_eq!(d.health, i);
+        }
+    }
+
+    #[test]
+    fn live_count_tracks_removals_and_clear() {
+        let store = EntityStore::new();
+        for i in 0..5 {
+            store.add(&Dwarf {
+                name: format!("D{}", i),
+                health: i,
+            });
+        }
+        assert_eq!(store.count(), 5);
+        store.remove_by_id(1);
+        assert_eq!(store.count(), 4);
+        store.remove_by_id(0);
+        assert_eq!(store.count(), 3);
+        store.clear();
+        assert_eq!(store.count(), 0);
+        store.add(&Dwarf {
+            name: "Fresh".into(),
+            health: 1,
+        });
+        assert_eq!(store.count(), 1);
+    }
+
+    #[derive(Clone)]
+    #[repr(align(64))]
+    struct OverAligned {
+        tag: u32,
+        payload: [u8; 40],
+    }
+
+    #[test]
+    fn over_aligned_types_stay_aligned_through_add_iterate_remove() {
+        let store = EntityStore::new();
+        for i in 0..8u32 {
+            store.add(&OverAligned {
+                tag: i,
+                payload: [i as u8; 40],
+            });
+        }
+
+        for r in store.all::<OverAligned>() {
+            assert_eq!(r.payload, [r.tag as u8; 40]);
+        }
+
+        assert!(store.remove_by_id(2));
+
+        for r in store.all::<OverAligned>() {
+            assert_eq!(r.payload, [r.tag as u8; 40]);
+        }
+
+        store.add(&OverAligned {
+            tag: 9,
+            payload: [9; 40],
+        });
+        for r in store.all::<OverAligned>() {
+            assert_eq!(r.payload, [r.tag as u8; 40]);
+        }
+        assert_eq!(store.count(), 8);
+    }
+
+    #[derive(Clone)]
+    struct ZeroSized;
+
+    #[test]
+    fn zero_sized_components_work() {
+        let store = EntityStore::new();
+        store.add(&ZeroSized);
+        store.add(&ZeroSized);
+        store.add(&ZeroSized);
+        assert_eq!(store.count(), 3);
+
+        let mut n = 0;
+        store.each::<ZeroSized, _>(|_| n += 1);
+        assert_eq!(n, 3);
+
+        assert!(store.remove_by_id(1));
+        assert_eq!(store.count(), 2);
+        assert_eq!(store.all::<ZeroSized>().count(), 2);
+
+        let ids: Vec<u64> = store.all::<ZeroSized>().map(|r| r.id()).collect();
+        assert_eq!(ids, vec![0, 2]);
     }
 }

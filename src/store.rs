@@ -1,9 +1,12 @@
 use std::any::TypeId;
 use std::collections::{HashMap, VecDeque};
-use std::sync::RwLock;
+use std::marker::PhantomData;
+use std::ops::Deref;
+use std::ptr::NonNull;
+use std::sync::{RwLock, RwLockReadGuard};
 
 use crate::entity_ref::EntityRef;
-use crate::refs::{Ref, RefMut};
+use crate::refs::{Guard, Ref, RefMut, SharedGuard};
 use crate::storage::TypedStorage;
 
 pub(crate) struct StoreInner {
@@ -17,6 +20,7 @@ pub(crate) struct StoreInner {
     pub(crate) parents: Vec<u64>,
     pub(crate) children: Vec<Vec<u64>>,
     pub(crate) alive: Vec<bool>,
+    pub(crate) live_count: usize,
 
     pub(crate) next_id: usize,
 }
@@ -32,12 +36,9 @@ impl StoreInner {
             parents: Vec::new(),
             children: Vec::new(),
             alive: Vec::new(),
+            live_count: 0,
             next_id: 0,
         }
-    }
-
-    pub(crate) fn count(&self) -> usize {
-        self.alive.iter().filter(|&&a| a).count()
     }
 
     pub(crate) fn allocate_id(&mut self) -> usize {
@@ -137,7 +138,7 @@ impl EntityStore {
 
     /// Returns the number of currently alive entities.
     pub fn count(&self) -> usize {
-        self.inner.read().unwrap().count()
+        self.inner.read().unwrap().live_count
     }
 
     // ── Add ───────────────────────────────────────────────────────────────
@@ -145,14 +146,15 @@ impl EntityStore {
     /// Adds a component to the store. The entity is assigned a new id.
     pub fn add<T: 'static + Clone>(&self, entity: &T) {
         let mut guard = self.inner.write().unwrap();
+        let id = guard.allocate_id();
         let storage_idx = guard.ensure_storage::<T>();
         let storage = &mut guard.storages[storage_idx];
-        let slot = storage.push_raw(entity);
-        let id = guard.allocate_id();
+        let slot = storage.push_raw(entity, id as u64);
         guard.type_ids[id] = TypeId::of::<T>();
         guard.slots[id] = slot;
         guard.alive[id] = true;
         guard.type_storage_idx[id] = storage_idx;
+        guard.live_count += 1;
     }
 
     // ── Query (read) ──────────────────────────────────────────────────────
@@ -160,42 +162,32 @@ impl EntityStore {
     /// Returns a read guard to the first live entity of type `T`, or `None`.
     pub fn first<T: 'static>(&self) -> Option<Ref<'_, T>> {
         let guard = self.inner.read().unwrap();
-        let storage_idx = guard.storage_map.get(&TypeId::of::<T>())?;
-        let storage = &guard.storages[*storage_idx];
-
-        for id in 0..guard.alive.len() {
-            if guard.alive[id]
-                && guard.type_ids[id] == TypeId::of::<T>()
-                && guard.slots[id] < storage.len()
-            {
-                let ptr = storage.raw_ptr::<T>(guard.slots[id]);
-                return Some(Ref {
-                    id,
-                    ptr,
-                    _guard: guard,
-                });
-            }
-        }
-        None
+        let &storage_idx = guard.storage_map.get(&TypeId::of::<T>())?;
+        let storage = &guard.storages[storage_idx];
+        let &entity_id = storage.entity_ids.first()?;
+        let id = entity_id as usize;
+        let ptr = storage.raw_ptr::<T>(guard.slots[id]);
+        Some(Ref {
+            id,
+            ptr,
+            _guard: Guard::Owned(guard),
+        })
     }
 
     /// Returns a read guard to the entity with the given numeric id, or `None`.
     pub fn get_by_id<T: 'static>(&self, entity_id: u64) -> Option<Ref<'_, T>> {
         let guard = self.inner.read().unwrap();
         let id = entity_id as usize;
-        if id >= guard.alive.len()
-            || !guard.alive[id]
-            || guard.type_ids[id] != TypeId::of::<T>()
-        {
+        if id >= guard.alive.len() || !guard.alive[id] || guard.type_ids[id] != TypeId::of::<T>() {
             return None;
         }
-        let &storage_idx = guard.storage_map.get(&TypeId::of::<T>())?;
+        let storage_idx = guard.type_storage_idx[id];
         let storage = &guard.storages[storage_idx];
         let ptr = storage.raw_ptr::<T>(guard.slots[id]);
         Some(Ref {
             id,
             ptr,
-            _guard: guard,
+            _guard: Guard::Owned(guard),
         })
     }
 
@@ -215,45 +207,63 @@ impl EntityStore {
             return;
         };
         let storage = &guard.storages[storage_idx];
-        for id in 0..guard.alive.len() {
-            if guard.alive[id] && guard.type_ids[id] == TypeId::of::<T>() {
-                f(storage.get::<T>(guard.slots[id]));
-            }
+        for slot in 0..storage.len() {
+            f(storage.get::<T>(slot));
         }
     }
 
     /// Returns an iterator over read guards for all live entities of type `T`.
+    ///
+    /// The read lock is acquired once and shared across every yielded [`Ref`]
+    /// via a `Cell`-based manual refcount; `Ref` carries the `unsafe Send`/`Sync`
+    /// impls that make moving such a guard between threads safe.
     pub fn all<T: 'static>(&self) -> AllIter<'_, T> {
-        let ids: Vec<usize>;
-        let storage_idx: usize;
-
-        {
-            let guard = self.inner.read().unwrap();
-            let Some(&si) = guard.storage_map.get(&TypeId::of::<T>()) else {
-                return AllIter {
-                    store: &self.inner,
-                    ids: Vec::new(),
-                    pos: 0,
-                    storage_idx: 0,
-                    _phantom: std::marker::PhantomData,
-                };
+        let guard = self.inner.read().unwrap();
+        let Some(&storage_idx) = guard.storage_map.get(&TypeId::of::<T>()) else {
+            return AllIter {
+                guard: SharedGuard::new(guard),
+                pos: 0,
+                len: 0,
+                storage_idx: 0,
+                _phantom: PhantomData,
+                _phantom_t: PhantomData,
             };
-            storage_idx = si;
-            ids = guard
-                .alive
-                .iter()
-                .enumerate()
-                .filter(|(idx, a)| **a && guard.type_ids[*idx] == TypeId::of::<T>())
-                .map(|(id, _)| id)
-                .collect();
-        }
-
+        };
+        let len = guard.storages[storage_idx].len();
         AllIter {
-            store: &self.inner,
-            ids,
+            guard: SharedGuard::new(guard),
             pos: 0,
+            len,
             storage_idx,
-            _phantom: std::marker::PhantomData,
+            _phantom: PhantomData,
+            _phantom_t: PhantomData,
+        }
+    }
+
+    /// Returns a zero-copy view of raw component data for all entities of type
+    /// `T`.
+    ///
+    /// The returned [`AllSlice`] derefs to `&[T]`, giving direct slice access
+    /// with no per-element wrapper overhead. Entity ids are not available
+    /// through this view — use [`EntityStore::all`] if you need per-element
+    /// [`Ref`] handles with ids.
+    pub fn all_slice<T: 'static>(&self) -> AllSlice<'_, T> {
+        let guard = self.inner.read().unwrap();
+        let (ptr, len) = if let Some(&storage_idx) = guard.storage_map.get(&TypeId::of::<T>()) {
+            let len = guard.storages[storage_idx].len();
+            let ptr = if len > 0 {
+                guard.storages[storage_idx].raw_ptr::<T>(0)
+            } else {
+                NonNull::<T>::dangling().as_ptr() as *const T
+            };
+            (ptr, len)
+        } else {
+            (NonNull::<T>::dangling().as_ptr() as *const T, 0)
+        };
+        AllSlice {
+            _guard: guard,
+            ptr,
+            len,
         }
     }
 
@@ -263,35 +273,25 @@ impl EntityStore {
     pub fn first_mut<T: 'static>(&self) -> Option<RefMut<'_, T>> {
         let mut guard = self.inner.write().unwrap();
         let &storage_idx = guard.storage_map.get(&TypeId::of::<T>())?;
-
-        for id in 0..guard.alive.len() {
-            let slot = guard.slots[id];
-            if guard.alive[id]
-                && guard.type_ids[id] == TypeId::of::<T>()
-                && slot < guard.storages[storage_idx].len()
-            {
-                let ptr = guard.storages[storage_idx].mut_raw_ptr::<T>(slot);
-                return Some(RefMut {
-                    id,
-                    ptr,
-                    _guard: guard,
-                });
-            }
-        }
-        None
+        let &entity_id = guard.storages[storage_idx].entity_ids.first()?;
+        let id = entity_id as usize;
+        let slot = guard.slots[id];
+        let ptr = guard.storages[storage_idx].mut_raw_ptr::<T>(slot);
+        Some(RefMut {
+            id,
+            ptr,
+            _guard: guard,
+        })
     }
 
     /// Returns a write guard to the entity with the given numeric id, or `None`.
     pub fn get_by_id_mut<T: 'static>(&self, entity_id: u64) -> Option<RefMut<'_, T>> {
         let mut guard = self.inner.write().unwrap();
         let id = entity_id as usize;
-        if id >= guard.alive.len()
-            || !guard.alive[id]
-            || guard.type_ids[id] != TypeId::of::<T>()
-        {
+        if id >= guard.alive.len() || !guard.alive[id] || guard.type_ids[id] != TypeId::of::<T>() {
             return None;
         }
-        let &storage_idx = guard.storage_map.get(&TypeId::of::<T>())?;
+        let storage_idx = guard.type_storage_idx[id];
         let slot = guard.slots[id];
         let ptr = guard.storages[storage_idx].mut_raw_ptr::<T>(slot);
         Some(RefMut {
@@ -334,14 +334,10 @@ impl EntityStore {
         let Some(&storage_idx) = guard.storage_map.get(&TypeId::of::<T>()) else {
             return;
         };
-
-        let stable_ids: Vec<(usize, usize)> = (0..guard.alive.len())
-            .filter(|&id| guard.alive[id] && guard.type_ids[id] == TypeId::of::<T>())
-            .map(|id| (id, guard.slots[id]))
-            .collect();
-
-        for (_, slot) in stable_ids {
-            f(guard.storages[storage_idx].get_mut::<T>(slot));
+        let len = guard.storages[storage_idx].len();
+        let storage = &mut guard.storages[storage_idx];
+        for slot in 0..len {
+            f(storage.get_mut::<T>(slot));
         }
     }
 
@@ -379,11 +375,7 @@ impl EntityStore {
     }
 
     /// Attaches multiple children (by id) to a parent (by id) in one call.
-    pub fn add_children_ids(
-        &self,
-        parent: u64,
-        children: &[u64],
-    ) -> Result<(), PicoError> {
+    pub fn add_children_ids(&self, parent: u64, children: &[u64]) -> Result<(), PicoError> {
         let parent_usize = parent as usize;
         let mut guard = self.inner.write().unwrap();
 
@@ -520,44 +512,7 @@ impl EntityStore {
         if id >= guard.alive.len() || !guard.alive[id] {
             return false;
         }
-
-        let children_to_remove: Vec<usize> = guard.children[id]
-            .iter()
-            .map(|&c| c as usize)
-            .collect();
-        drop(children_to_remove);
-
-        for child_id in &guard.children[id].clone() {
-            self.remove_recursive(guard, *child_id as usize);
-        }
-
-        let storage_idx = guard.type_storage_idx[id];
-        let slot = guard.slots[id];
-        let _old_type_id = guard.type_ids[id];
-
-        if guard.storages[storage_idx].swap_remove::<u8>(slot).is_some() {
-            for search_id in 0..guard.type_ids.len() {
-                if guard.alive[search_id]
-                    && guard.type_storage_idx[search_id] == storage_idx
-                    && guard.slots[search_id] == guard.storages[storage_idx].len()
-                    && search_id != id
-                {
-                    guard.slots[search_id] = slot;
-                    break;
-                }
-            }
-        }
-
-        let parent_id = guard.parents[id];
-        if parent_id != u64::MAX {
-            let pid = parent_id as usize;
-            guard.children[pid].retain(|&c| c != id as u64);
-        }
-
-        guard.alive[id] = false;
-        guard.children[id].clear();
-        guard.parents[id] = u64::MAX;
-
+        self.remove_recursive(guard, id);
         true
     }
 
@@ -566,6 +521,7 @@ impl EntityStore {
             return;
         }
 
+        // Collect before removing so we don't iterate a vec we're about to clear.
         let children_to_remove: Vec<usize> =
             guard.children[id].iter().map(|&c| c as usize).collect();
 
@@ -576,17 +532,8 @@ impl EntityStore {
         let storage_idx = guard.type_storage_idx[id];
         let slot = guard.slots[id];
 
-        if guard.storages[storage_idx].swap_remove::<u8>(slot).is_some() {
-            for search_id in 0..guard.type_ids.len() {
-                if guard.alive[search_id]
-                    && guard.type_storage_idx[search_id] == storage_idx
-                    && guard.slots[search_id] == guard.storages[storage_idx].len()
-                    && search_id != id
-                {
-                    guard.slots[search_id] = slot;
-                    break;
-                }
-            }
+        if let Some((displaced_id, _last_slot)) = guard.storages[storage_idx].swap_remove(slot) {
+            guard.slots[displaced_id as usize] = slot;
         }
 
         let parent_id = guard.parents[id];
@@ -598,6 +545,7 @@ impl EntityStore {
         guard.alive[id] = false;
         guard.children[id].clear();
         guard.parents[id] = u64::MAX;
+        guard.live_count -= 1;
     }
 
     /// Removes an entity by numeric id (including descendants). Returns `true`
@@ -619,6 +567,7 @@ impl EntityStore {
         guard.parents.clear();
         guard.children.clear();
         guard.alive.clear();
+        guard.live_count = 0;
         guard.next_id = 0;
     }
 
@@ -634,40 +583,79 @@ impl EntityStore {
 /// An iterator over read guards for all live entities of a given type.
 ///
 /// Created by [`EntityStore::all`].
+///
+/// Acquires the store's read lock once and shares it (via a `Cell`-based
+/// manual refcount) with every yielded reference, so iteration costs a single
+/// lock acquisition instead of one per element. The lock is held for as long
+/// as the iterator or any yielded [`Ref`] is alive, which also guarantees
+/// the storage is stable: no per-element liveness or bounds re-checks are
+/// needed.
 pub struct AllIter<'a, T> {
-    store: &'a RwLock<StoreInner>,
-    ids: Vec<usize>,
+    guard: SharedGuard,
     pos: usize,
+    len: usize,
     storage_idx: usize,
-    _phantom: std::marker::PhantomData<T>,
+    _phantom: PhantomData<&'a ()>,
+    _phantom_t: PhantomData<T>,
 }
 
 impl<'a, T: 'static> Iterator for AllIter<'a, T> {
     type Item = Ref<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.pos < self.ids.len() {
-            let id = self.ids[self.pos];
-            self.pos += 1;
-
-            let guard = self.store.read().unwrap();
-
-            if id < guard.alive.len()
-                && guard.alive[id]
-                && guard.type_ids[id] == TypeId::of::<T>()
-            {
-                let storage = &guard.storages[self.storage_idx];
-                let slot = guard.slots[id];
-                if slot < storage.len() {
-                    let ptr = storage.raw_ptr::<T>(slot);
-                    return Some(Ref {
-                        id,
-                        ptr,
-                        _guard: guard,
-                    });
-                }
-            }
+        if self.pos >= self.len {
+            return None;
         }
-        None
+        let slot = self.pos;
+        self.pos += 1;
+
+        let store = self.guard.store();
+        let entity_id = store.storages[self.storage_idx].entity_ids[slot];
+        let storage = &store.storages[self.storage_idx];
+        let ptr = storage.raw_ptr::<T>(slot);
+        Some(Ref {
+            id: entity_id as usize,
+            ptr,
+            _guard: Guard::Shared(self.guard.clone_ref()),
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.len - self.pos;
+        (remaining, Some(remaining))
+    }
+
+    fn count(self) -> usize {
+        self.len - self.pos
     }
 }
+
+// ── AllSlice ─────────────────────────────────────────────────────────────
+
+/// A zero-copy view of raw component data for all entities of a given type.
+///
+/// Created by [`EntityStore::all_slice`].
+///
+/// Holds the store's read lock and derefs to `&[T]` — a direct slice into the
+/// storage buffer with no per-element wrapper overhead. Entity ids are not
+/// available through this view.
+pub struct AllSlice<'a, T> {
+    _guard: RwLockReadGuard<'a, StoreInner>,
+    ptr: *const T,
+    len: usize,
+}
+
+impl<'a, T> Deref for AllSlice<'a, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        if self.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+        }
+    }
+}
+
+unsafe impl<T> Send for AllSlice<'_, T> {}
+unsafe impl<T> Sync for AllSlice<'_, T> {}

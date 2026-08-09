@@ -1,8 +1,67 @@
+use std::cell::Cell;
+use std::mem;
 use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
 use crate::entity_ref::EntityRef;
 use crate::store::StoreInner;
+
+struct SharedGuardInner {
+    guard: RwLockReadGuard<'static, StoreInner>,
+    refs: Cell<usize>,
+}
+
+pub(crate) struct SharedGuard(NonNull<SharedGuardInner>);
+
+impl SharedGuard {
+    pub(crate) fn new(guard: RwLockReadGuard<'_, StoreInner>) -> Self {
+        let inner = Box::new(SharedGuardInner {
+            guard: unsafe { mem::transmute(guard) },
+            refs: Cell::new(1),
+        });
+        Self(unsafe { NonNull::new_unchecked(Box::into_raw(inner)) })
+    }
+
+    pub(crate) fn clone_ref(&self) -> Self {
+        unsafe {
+            self.0.as_ref().refs.set(self.0.as_ref().refs.get() + 1);
+        }
+        Self(self.0)
+    }
+
+    pub(crate) fn store(&self) -> &StoreInner {
+        unsafe { &self.0.as_ref().guard }
+    }
+}
+
+impl Drop for SharedGuard {
+    fn drop(&mut self) {
+        unsafe {
+            let refs = self.0.as_ref().refs.get() - 1;
+            if refs == 0 {
+                drop(Box::from_raw(self.0.as_ptr()));
+            } else {
+                self.0.as_ref().refs.set(refs);
+            }
+        }
+    }
+}
+
+unsafe impl Send for SharedGuard {}
+unsafe impl Sync for SharedGuard {}
+
+/// Internal guard ownership for [`Ref`].
+///
+/// Single-entity lookups (`first`, `get_by_id`, `resolve`) own their read lock
+/// directly. Bulk iteration via [`EntityStore::all`](crate::store::EntityStore::all)
+/// shares one read lock across every yielded reference through a `Cell`-based
+/// manual refcount (avoids the atomic increment of `Arc::clone`).
+#[allow(dead_code)] // variant fields are only ever held for RAII, never read
+pub(crate) enum Guard<'a> {
+    Owned(RwLockReadGuard<'a, StoreInner>),
+    Shared(SharedGuard),
+}
 
 /// A read guard for a component of type `T`.
 ///
@@ -11,7 +70,7 @@ use crate::store::StoreInner;
 pub struct Ref<'a, T> {
     pub(crate) id: usize,
     pub(crate) ptr: *const T,
-    pub(crate) _guard: RwLockReadGuard<'a, StoreInner>,
+    pub(crate) _guard: Guard<'a>,
 }
 
 impl<'a, T: 'a> Deref for Ref<'a, T> {
