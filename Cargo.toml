@@ -1,6 +1,6 @@
 [package]
 name = "pico-entity-store"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "A tiny, fast entity-component store for Rust"
 license = "MIT"
