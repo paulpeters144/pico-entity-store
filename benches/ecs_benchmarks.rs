@@ -1,5 +1,5 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use pico_entity_store::prelude::EntityStore;
+use pico_entity_store::prelude::*;
 
 const ENTITY_COUNTS: &[usize] = &[1000, 10000];
 const BATCH_REMOVE_COUNT: usize = 100;
@@ -25,28 +25,43 @@ struct OtherBenchmarkEntity {
 fn add_entities_mixed(store: &EntityStore, n: usize) {
     for i in 0..n {
         if i % 2 == 0 {
-            store.add(&BenchmarkEntity {
-                x: i as u64,
-                y: 0,
-                z: 0,
-            });
+            store
+                .add(
+                    BenchmarkEntity {
+                        x: i as u64,
+                        y: 0,
+                        z: 0,
+                    },
+                    &[],
+                )
+                .unwrap();
         } else {
-            store.add(&OtherBenchmarkEntity {
-                x: i as u64,
-                y: 0,
-                z: 0,
-            });
+            store
+                .add(
+                    OtherBenchmarkEntity {
+                        x: i as u64,
+                        y: 0,
+                        z: 0,
+                    },
+                    &[],
+                )
+                .unwrap();
         }
     }
 }
 
 fn add_entities_single(store: &EntityStore, n: usize) {
     for i in 0..n {
-        store.add(&BenchmarkEntity {
-            x: i as u64,
-            y: 0,
-            z: 0,
-        });
+        store
+            .add(
+                BenchmarkEntity {
+                    x: i as u64,
+                    y: 0,
+                    z: 0,
+                },
+                &[],
+            )
+            .unwrap();
     }
 }
 
@@ -75,6 +90,68 @@ fn bench_add(c: &mut Criterion) {
             },
         );
     }
+
+    for &entity_count in ENTITY_COUNTS {
+        group.bench_with_input(
+            BenchmarkId::new("batch", entity_count),
+            &entity_count,
+            |b, &n| {
+                b.iter_batched(
+                    || {
+                        let entities: Vec<BenchmarkEntity> = (0..n)
+                            .map(|i| BenchmarkEntity {
+                                x: i as u64,
+                                y: 0,
+                                z: 0,
+                            })
+                            .collect();
+                        entities
+                    },
+                    |entities| {
+                        let store = EntityStore::new();
+                        for entity in entities {
+                            store.add(entity, &[]).unwrap();
+                        }
+                        store
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ── add/marginal (single add into a pre-grown, warm-capacity store) ──────
+
+fn bench_add_marginal(c: &mut Criterion) {
+    let mut group = c.benchmark_group("add");
+    group.warm_up_time(std::time::Duration::from_secs(1));
+    group.measurement_time(std::time::Duration::from_secs(1));
+    group.sample_size(SAMPLE_SIZE);
+
+    // `Vec::clear` retains capacity, so after this warm-up + clear every
+    // refill and every timed add below reuses already-allocated storage —
+    // no realloc or page-fault churn inside the timed loop.
+    let store = EntityStore::new();
+    add_entities_single(&store, 10_000);
+    store.clear();
+
+    group.bench_function("marginal_10k", |b| {
+        b.iter_custom(|iters| {
+            // Untimed reset: back to exactly 10k live entities.
+            store.clear();
+            add_entities_single(&store, 10_000);
+            let start = std::time::Instant::now();
+            for i in 0..iters {
+                store
+                    .add(BenchmarkEntity { x: i, y: 0, z: 0 }, &[])
+                    .unwrap();
+            }
+            start.elapsed()
+        });
+    });
 
     group.finish();
 }
@@ -200,14 +277,21 @@ fn bench_descendants(c: &mut Criterion) {
 
     let store = EntityStore::new();
     for i in 0..=DESCENDANT_CHAIN_DEPTH {
-        store.add(&BenchmarkEntity {
-            x: i as u64,
-            y: 0,
-            z: 0,
-        });
+        store
+            .add(
+                BenchmarkEntity {
+                    x: i as u64,
+                    y: 0,
+                    z: 0,
+                },
+                &[],
+            )
+            .unwrap();
     }
     for i in 0..DESCENDANT_CHAIN_DEPTH as u64 {
-        store.add_children_ids(i, &[i + 1]).unwrap();
+        let parent = store.get_by_id::<BenchmarkEntity>(i).unwrap();
+        let child = store.get_by_id::<BenchmarkEntity>(i + 1).unwrap();
+        store.add(parent, &children![child]).unwrap();
     }
 
     let root_ref = store.get_by_id::<BenchmarkEntity>(0).unwrap();
@@ -241,14 +325,12 @@ fn bench_remove(c: &mut Criterion) {
                         store
                     },
                     |store| {
-                        let ids: Vec<u64> = store
+                        let erefs: Vec<EntityRef> = store
                             .all::<BenchmarkEntity>()
                             .take(BATCH_REMOVE_COUNT)
-                            .map(|r| r.id())
+                            .map(|r| r.entity_ref())
                             .collect();
-                        for id in ids {
-                            store.remove_by_id(id);
-                        }
+                        store.remove(&erefs);
                         store
                     },
                     BatchSize::SmallInput,
@@ -257,29 +339,6 @@ fn bench_remove(c: &mut Criterion) {
         );
     }
 
-    group.finish();
-}
-
-// ── all_slice (zero-copy view — matches C# AllType semantics) ──────────────
-
-fn bench_all_slice(c: &mut Criterion) {
-    let mut group = c.benchmark_group("all_slice");
-    group.sample_size(SAMPLE_SIZE);
-
-    for &entity_count in ENTITY_COUNTS {
-        let store = EntityStore::new();
-        add_entities_mixed(&store, entity_count);
-
-        group.bench_with_input(
-            BenchmarkId::new("view", entity_count),
-            &entity_count,
-            |b, _n| {
-                b.iter(|| {
-                    black_box(store.all_slice::<BenchmarkEntity>());
-                });
-            },
-        );
-    }
     group.finish();
 }
 
@@ -295,26 +354,35 @@ fn bench_remove_with_children(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let store = EntityStore::new();
-                let mut parent_ids = Vec::new();
+                let mut parent_erefs = Vec::new();
                 for _ in 0..BATCH_REMOVE_COUNT {
-                    let p_id = store.count() as u64;
-                    store.add(&BenchmarkEntity { x: 0, y: 0, z: 0 });
-                    parent_ids.push(p_id);
-                    let child_ids: Vec<u64> = (0..10)
+                    let p_id = store
+                        .add(BenchmarkEntity { x: 0, y: 0, z: 0 }, &[])
+                        .unwrap();
+                    parent_erefs.push(
+                        store
+                            .get_by_id::<BenchmarkEntity>(p_id)
+                            .unwrap()
+                            .entity_ref(),
+                    );
+                    let child_erefs: Vec<EntityRef> = (0..10)
                         .map(|_| {
-                            let id = store.count() as u64;
-                            store.add(&BenchmarkEntity { x: 0, y: 0, z: 0 });
-                            id
+                            let cid = store
+                                .add(BenchmarkEntity { x: 0, y: 0, z: 0 }, &[])
+                                .unwrap();
+                            store
+                                .get_by_id::<BenchmarkEntity>(cid)
+                                .unwrap()
+                                .entity_ref()
                         })
                         .collect();
-                    store.add_children_ids(p_id, &child_ids).unwrap();
+                    let parent = store.get_by_id::<BenchmarkEntity>(p_id).unwrap();
+                    store.add(parent, &child_erefs).unwrap();
                 }
-                (store, parent_ids)
+                (store, parent_erefs)
             },
-            |(store, parent_ids)| {
-                for id in parent_ids {
-                    store.remove_by_id(id);
-                }
+            |(store, parent_erefs)| {
+                store.remove(&parent_erefs);
                 store
             },
             BatchSize::SmallInput,
@@ -327,10 +395,10 @@ fn bench_remove_with_children(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_add,
+    bench_add_marginal,
     bench_get_by_id,
     bench_each,
     bench_all,
-    bench_all_slice,
     bench_first,
     bench_descendants,
     bench_remove,

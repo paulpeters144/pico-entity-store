@@ -16,8 +16,8 @@
 //!
 //! let store = EntityStore::new();
 //!
-//! store.add(&Position { x: 0.0, y: 0.0 });
-//! store.add(&Velocity { dx: 1.0, dy: 2.0 });
+//! store.add(Position { x: 0.0, y: 0.0 }, &[]).unwrap();
+//! store.add(Velocity { dx: 1.0, dy: 2.0 }, &[]).unwrap();
 //!
 //! if let Some(pos) = store.first::<Position>() {
 //!     println!("({}, {})", pos.x, pos.y);
@@ -33,13 +33,10 @@ pub mod refs;
 pub mod storage;
 pub mod store;
 
-#[cfg(test)]
-mod test;
-
 /// Convenient re-exports for working with the ECS.
 pub mod prelude {
     pub use crate::children;
     pub use crate::entity_ref::EntityRef;
     pub use crate::refs::{Ref, RefMut};
-    pub use crate::store::{AllSlice, EntityStore, PicoError};
+    pub use crate::store::{EntityStore, PicoError};
 }

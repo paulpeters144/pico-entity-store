@@ -1,92 +1,75 @@
-use std::cell::Cell;
-use std::mem;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
-use std::ptr::NonNull;
-use std::sync::{RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{RwLockReadGuard, RwLockWriteGuard};
+use std::sync::Arc;
 
 use crate::entity_ref::EntityRef;
+use crate::storage::TypedStorage;
 use crate::store::StoreInner;
 
-struct SharedGuardInner {
-    guard: RwLockReadGuard<'static, StoreInner>,
-    refs: Cell<usize>,
-}
+/// A read guard on the store shared between an [`AllIter`](crate::store::AllIter)
+/// and every [`Ref`] it yields.
+///
+/// A plain `Arc` around the lock guard: cloning a `Ref`'s guard is one atomic
+/// increment, and the lock is released when the last reference drops.
+pub(crate) struct SharedGuard<'a>(Arc<RwLockReadGuard<'a, StoreInner>>);
 
-pub(crate) struct SharedGuard(NonNull<SharedGuardInner>);
-
-impl SharedGuard {
-    pub(crate) fn new(guard: RwLockReadGuard<'_, StoreInner>) -> Self {
-        let inner = Box::new(SharedGuardInner {
-            guard: unsafe {
-                mem::transmute::<
-                    RwLockReadGuard<'_, StoreInner>,
-                    RwLockReadGuard<'static, StoreInner>,
-                >(guard)
-            },
-            refs: Cell::new(1),
-        });
-        Self(unsafe { NonNull::new_unchecked(Box::into_raw(inner)) })
+impl<'a> SharedGuard<'a> {
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub(crate) fn new(guard: RwLockReadGuard<'a, StoreInner>) -> Self {
+        Self(Arc::new(guard))
     }
 
     pub(crate) fn clone_ref(&self) -> Self {
-        unsafe {
-            self.0.as_ref().refs.set(self.0.as_ref().refs.get() + 1);
-        }
-        Self(self.0)
-    }
-
-    pub(crate) fn store(&self) -> &StoreInner {
-        unsafe { &self.0.as_ref().guard }
+        Self(Arc::clone(&self.0))
     }
 }
-
-impl Drop for SharedGuard {
-    fn drop(&mut self) {
-        unsafe {
-            let refs = self.0.as_ref().refs.get() - 1;
-            if refs == 0 {
-                drop(Box::from_raw(self.0.as_ptr()));
-            } else {
-                self.0.as_ref().refs.set(refs);
-            }
-        }
-    }
-}
-
-unsafe impl Send for SharedGuard {}
-unsafe impl Sync for SharedGuard {}
 
 /// Internal guard ownership for [`Ref`].
 ///
 /// Single-entity lookups (`first`, `get_by_id`, `resolve`) own their read lock
 /// directly. Bulk iteration via [`EntityStore::all`](crate::store::EntityStore::all)
-/// shares one read lock across every yielded reference through a `Cell`-based
-/// manual refcount (avoids the atomic increment of `Arc::clone`).
-#[allow(dead_code)] // variant fields are only ever held for RAII, never read
+/// shares one read lock across every yielded reference through an `Arc`.
 pub(crate) enum Guard<'a> {
     Owned(RwLockReadGuard<'a, StoreInner>),
-    Shared(SharedGuard),
+    Shared(SharedGuard<'a>),
+}
+
+/// Resolves the slot coordinates held by a reference into the store's storage.
+#[inline]
+fn resolve<T: 'static>(store: &StoreInner, storage_idx: usize, slot: usize) -> &T {
+    let storage = store.storages[storage_idx]
+        .as_any()
+        .downcast_ref::<TypedStorage<T>>()
+        .expect("storage type mismatch");
+    &storage.slots[slot].data
 }
 
 /// A read guard for a component of type `T`.
 ///
 /// Holds a read lock on the underlying store for the lifetime of the reference.
 /// Derefs to `&T`.
-pub struct Ref<'a, T> {
+pub struct Ref<'a, T: 'static> {
     pub(crate) id: usize,
-    pub(crate) ptr: *const T,
-    pub(crate) _guard: Guard<'a>,
+    pub(crate) slot: usize,
+    pub(crate) storage_idx: usize,
+    pub(crate) guard: Guard<'a>,
+    pub(crate) _phantom: PhantomData<T>,
 }
 
-impl<'a, T: 'a> Deref for Ref<'a, T> {
+impl<T: 'static> Deref for Ref<'_, T> {
     type Target = T;
 
-    fn deref(&self) -> &'a T {
-        unsafe { &*self.ptr }
+    #[inline]
+    fn deref(&self) -> &T {
+        match &self.guard {
+            Guard::Owned(g) => resolve(g, self.storage_idx, self.slot),
+            Guard::Shared(g) => resolve(&g.0, self.storage_idx, self.slot),
+        }
     }
 }
 
-impl<'a, T: 'static> Ref<'a, T> {
+impl<T: 'static> Ref<'_, T> {
     /// Returns the numeric entity id.
     pub fn id(&self) -> u64 {
         self.id as u64
@@ -105,27 +88,35 @@ impl<'a, T: 'static> Ref<'a, T> {
 ///
 /// Holds a write lock on the underlying store for the lifetime of the reference.
 /// Derefs to `&mut T`.
-pub struct RefMut<'a, T> {
+pub struct RefMut<'a, T: 'static> {
     pub(crate) id: usize,
-    pub(crate) ptr: *mut T,
-    pub(crate) _guard: RwLockWriteGuard<'a, StoreInner>,
+    pub(crate) slot: usize,
+    pub(crate) storage_idx: usize,
+    pub(crate) guard: RwLockWriteGuard<'a, StoreInner>,
+    pub(crate) _phantom: PhantomData<T>,
 }
 
-impl<'a, T> Deref for RefMut<'a, T> {
+impl<T: 'static> Deref for RefMut<'_, T> {
     type Target = T;
 
+    #[inline]
     fn deref(&self) -> &T {
-        unsafe { &*self.ptr }
+        resolve(&self.guard, self.storage_idx, self.slot)
     }
 }
 
-impl<'a, T> DerefMut for RefMut<'a, T> {
+impl<T: 'static> DerefMut for RefMut<'_, T> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut T {
-        unsafe { &mut *self.ptr }
+        let storage = self.guard.storages[self.storage_idx]
+            .as_any_mut()
+            .downcast_mut::<TypedStorage<T>>()
+            .expect("storage type mismatch");
+        &mut storage.slots[self.slot].data
     }
 }
 
-impl<'a, T: 'static> RefMut<'a, T> {
+impl<T: 'static> RefMut<'_, T> {
     /// Returns the numeric entity id.
     pub fn id(&self) -> u64 {
         self.id as u64
@@ -139,8 +130,3 @@ impl<'a, T: 'static> RefMut<'a, T> {
         }
     }
 }
-
-unsafe impl<T> Send for Ref<'_, T> {}
-unsafe impl<T> Sync for Ref<'_, T> {}
-unsafe impl<T> Send for RefMut<'_, T> {}
-unsafe impl<T> Sync for RefMut<'_, T> {}
