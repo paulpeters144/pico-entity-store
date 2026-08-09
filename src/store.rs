@@ -69,11 +69,33 @@ impl StoreInner {
     }
 }
 
+/// The core entity-component store.
+///
+/// Entities are identified by a `usize` id assigned at insertion time.
+/// Components are stored per-type in contiguous byte buffers and accessed
+/// through [`Ref`] / [`RefMut`] guards.
+///
+/// # Example
+///
+/// ```rust
+/// use pico_ecs::prelude::*;
+///
+/// #[derive(Clone)]
+/// struct Health(i32);
+///
+/// let store = EntityStore::new();
+/// store.add(&Health(100));
+///
+/// if let Some(h) = store.first::<Health>() {
+///     assert_eq!(h.0, 100);
+/// }
+/// ```
 pub struct EntityStore {
     pub(crate) inner: RwLock<StoreInner>,
 }
 
 impl EntityStore {
+    /// Creates an empty store.
     pub fn new() -> Self {
         Self {
             inner: RwLock::new(StoreInner::new()),
@@ -87,10 +109,14 @@ impl Default for EntityStore {
     }
 }
 
+/// Errors returned by [`EntityStore`] operations.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PicoError {
+    /// Attempted to query a component type that was never added.
     TypeNotRegistered,
+    /// The entity already has a parent in the hierarchy.
     AlreadyHasParent,
+    /// The entity has been removed or was never alive.
     EntityNotAlive,
 }
 
@@ -109,12 +135,14 @@ impl std::error::Error for PicoError {}
 impl EntityStore {
     // ── Count ─────────────────────────────────────────────────────────────
 
+    /// Returns the number of currently alive entities.
     pub fn count(&self) -> usize {
         self.inner.read().unwrap().count()
     }
 
     // ── Add ───────────────────────────────────────────────────────────────
 
+    /// Adds a component to the store. The entity is assigned a new id.
     pub fn add<T: 'static + Clone>(&self, entity: &T) {
         let mut guard = self.inner.write().unwrap();
         let storage_idx = guard.ensure_storage::<T>();
@@ -129,6 +157,7 @@ impl EntityStore {
 
     // ── Query (read) ──────────────────────────────────────────────────────
 
+    /// Returns a read guard to the first live entity of type `T`, or `None`.
     pub fn first<T: 'static>(&self) -> Option<Ref<'_, T>> {
         let guard = self.inner.read().unwrap();
         let storage_idx = guard.storage_map.get(&TypeId::of::<T>())?;
@@ -150,6 +179,7 @@ impl EntityStore {
         None
     }
 
+    /// Returns a read guard to the entity with the given numeric id, or `None`.
     pub fn get_by_id<T: 'static>(&self, entity_id: u64) -> Option<Ref<'_, T>> {
         let guard = self.inner.read().unwrap();
         let id = entity_id as usize;
@@ -169,6 +199,8 @@ impl EntityStore {
         })
     }
 
+    /// Resolves an [`EntityRef`] back into a typed read guard, or `None` if the
+    /// type doesn't match or the entity is dead.
     pub fn resolve<T: 'static>(&self, entity_ref: &EntityRef) -> Option<Ref<'_, T>> {
         if entity_ref.type_id != TypeId::of::<T>() {
             return None;
@@ -176,6 +208,7 @@ impl EntityStore {
         self.get_by_id::<T>(entity_ref.id as u64)
     }
 
+    /// Calls `f` with a shared reference to every live entity of type `T`.
     pub fn each<T: 'static, F: FnMut(&T)>(&self, mut f: F) {
         let guard = self.inner.read().unwrap();
         let Some(&storage_idx) = guard.storage_map.get(&TypeId::of::<T>()) else {
@@ -189,6 +222,7 @@ impl EntityStore {
         }
     }
 
+    /// Returns an iterator over read guards for all live entities of type `T`.
     pub fn all<T: 'static>(&self) -> AllIter<'_, T> {
         let ids: Vec<usize>;
         let storage_idx: usize;
@@ -225,6 +259,7 @@ impl EntityStore {
 
     // ── Query (write) ─────────────────────────────────────────────────────
 
+    /// Returns a write guard to the first live entity of type `T`, or `None`.
     pub fn first_mut<T: 'static>(&self) -> Option<RefMut<'_, T>> {
         let mut guard = self.inner.write().unwrap();
         let &storage_idx = guard.storage_map.get(&TypeId::of::<T>())?;
@@ -246,6 +281,7 @@ impl EntityStore {
         None
     }
 
+    /// Returns a write guard to the entity with the given numeric id, or `None`.
     pub fn get_by_id_mut<T: 'static>(&self, entity_id: u64) -> Option<RefMut<'_, T>> {
         let mut guard = self.inner.write().unwrap();
         let id = entity_id as usize;
@@ -265,6 +301,7 @@ impl EntityStore {
         })
     }
 
+    /// Resolves an [`EntityRef`] back into a typed write guard, or `None`.
     pub fn resolve_mut<T: 'static>(&self, entity_ref: &EntityRef) -> Option<RefMut<'_, T>> {
         if entity_ref.type_id != TypeId::of::<T>() {
             return None;
@@ -272,6 +309,8 @@ impl EntityStore {
         self.get_by_id_mut::<T>(entity_ref.id as u64)
     }
 
+    /// Mutates the component of the given entity in-place. Returns `true` if
+    /// the entity was alive and the types matched.
     pub fn update<T: 'static, F: FnOnce(&mut T)>(&self, entity_ref: &EntityRef, f: F) -> bool {
         if entity_ref.type_id != TypeId::of::<T>() {
             return false;
@@ -289,6 +328,7 @@ impl EntityStore {
         true
     }
 
+    /// Calls `f` with an exclusive reference to every live entity of type `T`.
     pub fn each_mut<T: 'static, F: FnMut(&mut T)>(&self, mut f: F) {
         let mut guard = self.inner.write().unwrap();
         let Some(&storage_idx) = guard.storage_map.get(&TypeId::of::<T>()) else {
@@ -307,6 +347,8 @@ impl EntityStore {
 
     // ── Hierarchy ─────────────────────────────────────────────────────────
 
+    /// Makes `child` a child of `parent`. Fails if the child already has a
+    /// parent or either entity is dead.
     pub fn add_child<P: 'static, C: 'static>(
         &self,
         parent: Ref<P>,
@@ -336,6 +378,7 @@ impl EntityStore {
         Ok(())
     }
 
+    /// Attaches multiple children (by id) to a parent (by id) in one call.
     pub fn add_children_ids(
         &self,
         parent: u64,
@@ -364,6 +407,26 @@ impl EntityStore {
     }
 }
 
+/// Collects child entity ids from [`Ref`](crate::refs::Ref) handles and drops
+/// the guards, returning a `Vec<u64>` suitable for
+/// [`add_children`](EntityStore::add_children).
+///
+/// # Example
+///
+/// ```rust
+/// use pico_ecs::prelude::*;
+///
+/// #[derive(Clone)] struct Node;
+///
+/// let store = EntityStore::new();
+/// store.add(&Node);
+/// store.add(&Node);
+///
+/// let a = store.first::<Node>().unwrap();
+/// let b = store.first::<Node>().unwrap();
+/// let ids = children![a, b];
+/// assert_eq!(ids.len(), 2);
+/// ```
 #[macro_export]
 macro_rules! children {
     ($($child:expr),+ $(,)?) => {{
@@ -374,6 +437,7 @@ macro_rules! children {
 }
 
 impl EntityStore {
+    /// Attaches multiple children (by id) to a parent reference.
     pub fn add_children<P: 'static>(
         &self,
         parent: Ref<P>,
@@ -383,6 +447,7 @@ impl EntityStore {
         drop(parent);
         self.add_children_ids(parent_id, children)
     }
+    /// Returns the parent of the given entity, or `None`.
     pub fn parent<T: 'static>(&self, entity: &Ref<T>) -> Option<EntityRef> {
         let guard = self.inner.read().unwrap();
         let parent_id = guard.parents[entity.id];
@@ -399,6 +464,7 @@ impl EntityStore {
         })
     }
 
+    /// Returns the direct children of the given entity.
     pub fn children<T: 'static>(&self, entity: &Ref<T>) -> Vec<EntityRef> {
         let guard = self.inner.read().unwrap();
         guard.children[entity.id]
@@ -413,6 +479,7 @@ impl EntityStore {
             .collect()
     }
 
+    /// Returns all descendants (breadth-first) of the given entity.
     pub fn descendants<T: 'static>(&self, entity: &Ref<T>) -> Vec<EntityRef> {
         let guard = self.inner.read().unwrap();
         let mut result = Vec::new();
@@ -439,6 +506,8 @@ impl EntityStore {
 
     // ── Removal ───────────────────────────────────────────────────────────
 
+    /// Removes an entity and all its descendants. Returns `true` if the entity
+    /// was alive.
     pub fn remove<T: 'static>(&self, entity: Ref<T>) -> bool {
         let id = entity.id;
         drop(entity);
@@ -531,12 +600,15 @@ impl EntityStore {
         guard.parents[id] = u64::MAX;
     }
 
+    /// Removes an entity by numeric id (including descendants). Returns `true`
+    /// if the entity was alive.
     pub fn remove_by_id(&self, entity_id: u64) -> bool {
         let mut guard = self.inner.write().unwrap();
         let id = entity_id as usize;
         self.remove_internal(&mut guard, id)
     }
 
+    /// Removes all entities and resets the store.
     pub fn clear(&self) {
         let mut guard = self.inner.write().unwrap();
         guard.storages.clear();
@@ -550,6 +622,7 @@ impl EntityStore {
         guard.next_id = 0;
     }
 
+    /// Returns `true` if the entity is still alive in the store.
     pub fn is_alive<T: 'static>(&self, entity: &Ref<T>) -> bool {
         let guard = self.inner.read().unwrap();
         entity.id < guard.alive.len() && guard.alive[entity.id]
@@ -558,6 +631,9 @@ impl EntityStore {
 
 // ── AllIter ──────────────────────────────────────────────────────────────
 
+/// An iterator over read guards for all live entities of a given type.
+///
+/// Created by [`EntityStore::all`].
 pub struct AllIter<'a, T> {
     store: &'a RwLock<StoreInner>,
     ids: Vec<usize>,
