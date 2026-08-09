@@ -1,7 +1,7 @@
-# pico-ecs
+# pico-entity-store
 
-[![Crates.io](https://img.shields.io/crates/v/pico-ecs.svg)](https://crates.io/crates/pico-ecs)
-[![docs.rs](https://docs.rs/pico-ecs/badge.svg)](https://docs.rs/pico-ecs)
+[![Crates.io](https://img.shields.io/crates/v/pico-entity-store.svg)](https://crates.io/crates/pico-entity-store)
+[![docs.rs](https://docs.rs/pico-entity-store/badge.svg)](https://docs.rs/pico-entity-store)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 
 A tiny, fast entity-component store for Rust. Store typed components per entity, query them by type, and build parent-child hierarchies — all with a simple, no-macro API.
@@ -20,11 +20,11 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pico-ecs = "0.3"
+pico-entity-store = "0.3"
 ```
 
 ```rust
-use pico_ecs::prelude::*;
+use pico_entity_store::prelude::*;
 
 #[derive(Clone)]
 struct Position {

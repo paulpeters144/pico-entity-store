@@ -6,7 +6,7 @@
 //! # Quick Start
 //!
 //! ```rust
-//! use pico_ecs::prelude::*;
+//! use pico_entity_store::prelude::*;
 //!
 //! #[derive(Clone)]
 //! struct Position { x: f32, y: f32 }

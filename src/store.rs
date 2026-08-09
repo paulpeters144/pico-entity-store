@@ -78,7 +78,7 @@ impl StoreInner {
 /// # Example
 ///
 /// ```rust
-/// use pico_ecs::prelude::*;
+/// use pico_entity_store::prelude::*;
 ///
 /// #[derive(Clone)]
 /// struct Health(i32);
@@ -414,7 +414,7 @@ impl EntityStore {
 /// # Example
 ///
 /// ```rust
-/// use pico_ecs::prelude::*;
+/// use pico_entity_store::prelude::*;
 ///
 /// #[derive(Clone)] struct Node;
 ///

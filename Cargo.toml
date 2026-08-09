@@ -1,10 +1,10 @@
 [package]
-name = "pico-ecs"
+name = "pico-entity-store"
 version = "0.3.0"
 edition = "2024"
 description = "A tiny, fast entity-component store for Rust"
 license = "MIT"
-repository = "https://github.com/paulpeters144/pico-ecs"
+repository = "https://github.com/paulpeters144/pico-entity-store"
 readme = "README.md"
 keywords = ["ecs", "entity", "component", "store", "game"]
 categories = ["game-development", "data-structures"]
