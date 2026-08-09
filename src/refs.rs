@@ -17,7 +17,12 @@ pub(crate) struct SharedGuard(NonNull<SharedGuardInner>);
 impl SharedGuard {
     pub(crate) fn new(guard: RwLockReadGuard<'_, StoreInner>) -> Self {
         let inner = Box::new(SharedGuardInner {
-            guard: unsafe { mem::transmute(guard) },
+            guard: unsafe {
+                mem::transmute::<
+                    RwLockReadGuard<'_, StoreInner>,
+                    RwLockReadGuard<'static, StoreInner>,
+                >(guard)
+            },
             refs: Cell::new(1),
         });
         Self(unsafe { NonNull::new_unchecked(Box::into_raw(inner)) })

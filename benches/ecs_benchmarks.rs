@@ -7,6 +7,7 @@ const SAMPLE_SIZE: usize = 100;
 const DESCENDANT_CHAIN_DEPTH: usize = 100;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct BenchmarkEntity {
     x: u64,
     y: u64,
@@ -14,6 +15,7 @@ struct BenchmarkEntity {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 struct OtherBenchmarkEntity {
     x: u64,
     y: u64,
