@@ -336,6 +336,53 @@ impl EntityStore {
         Ok(())
     }
 
+    pub fn add_children_ids(
+        &self,
+        parent: u64,
+        children: &[u64],
+    ) -> Result<(), PicoError> {
+        let parent_usize = parent as usize;
+        let mut guard = self.inner.write().unwrap();
+
+        for &cid_u64 in children {
+            let cid = cid_u64 as usize;
+            if !guard.alive[parent_usize] || !guard.alive[cid] {
+                return Err(PicoError::EntityNotAlive);
+            }
+            if guard.parents[cid] != u64::MAX {
+                return Err(PicoError::AlreadyHasParent);
+            }
+        }
+
+        for &cid_u64 in children {
+            let cid = cid_u64 as usize;
+            guard.parents[cid] = parent;
+            guard.children[parent_usize].push(cid_u64);
+        }
+
+        Ok(())
+    }
+}
+
+#[macro_export]
+macro_rules! children {
+    ($($child:expr),+ $(,)?) => {{
+        let ids = [$($child.id()),+];
+        $(drop($child);)+
+        ids
+    }};
+}
+
+impl EntityStore {
+    pub fn add_children<P: 'static>(
+        &self,
+        parent: Ref<P>,
+        children: &[u64],
+    ) -> Result<(), PicoError> {
+        let parent_id = parent.id();
+        drop(parent);
+        self.add_children_ids(parent_id, children)
+    }
     pub fn parent<T: 'static>(&self, entity: &Ref<T>) -> Option<EntityRef> {
         let guard = self.inner.read().unwrap();
         let parent_id = guard.parents[entity.id];

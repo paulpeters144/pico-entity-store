@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
+    use crate::children;
 
     #[derive(Clone)]
     struct Dwarf {
@@ -12,6 +13,12 @@ mod tests {
     struct Axe {
         damage: u32,
         durability: u32,
+    }
+
+    #[derive(Clone)]
+    #[allow(dead_code)]
+    struct Shield {
+        defense: u32,
     }
 
     #[test]
@@ -601,7 +608,7 @@ mod tests {
             assert_eq!(d1.name, "Gimli");
             assert_eq!(d1.health, 100);
             assert_eq!(a1.damage, 45);
-            store.add_child(d1, a1).unwrap();
+            store.add_children(d1, &children![a1]).unwrap();
         }
 
         let d = store.first::<Dwarf>().unwrap();
@@ -618,5 +625,225 @@ mod tests {
         for d in store.all::<Dwarf>() {
             assert_eq!(d.name, "Gimli");
         }
+    }
+
+    #[test]
+    fn add_children_links_multiple() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "Gimli".into(),
+            health: 100,
+        });
+        store.add(&Axe {
+            damage: 10,
+            durability: 50,
+        });
+        store.add(&Axe {
+            damage: 20,
+            durability: 60,
+        });
+        store.add(&Axe {
+            damage: 30,
+            durability: 70,
+        });
+
+        let parent = store.first::<Dwarf>().unwrap();
+        let c1 = store.get_by_id::<Axe>(1).unwrap();
+        let c2 = store.get_by_id::<Axe>(2).unwrap();
+        let c3 = store.get_by_id::<Axe>(3).unwrap();
+
+        store.add_children(parent, &children![c1, c2, c3]).unwrap();
+
+        let d = store.first::<Dwarf>().unwrap();
+        let children = store.children(&d);
+        assert_eq!(children.len(), 3);
+    }
+
+    #[test]
+    fn add_children_heterogeneous() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "Gimli".into(),
+            health: 100,
+        });
+        store.add(&Axe {
+            damage: 10,
+            durability: 50,
+        });
+        store.add(&Shield { defense: 80 });
+
+        let parent = store.first::<Dwarf>().unwrap();
+        let axe = store.first::<Axe>().unwrap();
+        let shield = store.first::<Shield>().unwrap();
+
+        store.add_children(parent, &children![axe, shield]).unwrap();
+
+        let d = store.first::<Dwarf>().unwrap();
+        let children = store.children(&d);
+        assert_eq!(children.len(), 2);
+        let child_types: Vec<_> = children
+            .iter()
+            .map(|c| {
+                if store.resolve::<Axe>(c).is_some() {
+                    "Axe"
+                } else if store.resolve::<Shield>(c).is_some() {
+                    "Shield"
+                } else {
+                    "Unknown"
+                }
+            })
+            .collect();
+        assert!(child_types.contains(&"Axe"));
+        assert!(child_types.contains(&"Shield"));
+    }
+
+    #[test]
+    fn add_children_parent_returns_correct() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "Gimli".into(),
+            health: 100,
+        });
+        store.add(&Axe {
+            damage: 10,
+            durability: 50,
+        });
+        store.add(&Axe {
+            damage: 20,
+            durability: 60,
+        });
+
+        let parent_id = store.first::<Dwarf>().unwrap().id();
+        let parent = store.get_by_id::<Dwarf>(parent_id).unwrap();
+        let c1 = store.get_by_id::<Axe>(1).unwrap();
+        let c2 = store.get_by_id::<Axe>(2).unwrap();
+
+        store.add_children(parent, &children![c1, c2]).unwrap();
+
+        let c1 = store.get_by_id::<Axe>(1).unwrap();
+        let c2 = store.get_by_id::<Axe>(2).unwrap();
+        assert_eq!(store.parent(&c1).unwrap().id(), parent_id);
+        assert_eq!(store.parent(&c2).unwrap().id(), parent_id);
+    }
+
+    #[test]
+    fn add_children_single_child() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "Gimli".into(),
+            health: 100,
+        });
+        store.add(&Axe {
+            damage: 45,
+            durability: 80,
+        });
+
+        let d = store.first::<Dwarf>().unwrap();
+        let a = store.first::<Axe>().unwrap();
+        store.add_children(d, &children![a]).unwrap();
+
+        let d = store.first::<Dwarf>().unwrap();
+        let children = store.children(&d);
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].id(), store.first::<Axe>().unwrap().id());
+    }
+
+    #[test]
+    fn add_children_already_parented_error() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "Gimli".into(),
+            health: 100,
+        });
+        store.add(&Dwarf {
+            name: "Thorin".into(),
+            health: 150,
+        });
+        store.add(&Axe {
+            damage: 45,
+            durability: 80,
+        });
+        store.add(&Axe {
+            damage: 60,
+            durability: 90,
+        });
+
+        let d1 = store.get_by_id::<Dwarf>(0).unwrap();
+        let a1 = store.get_by_id::<Axe>(2).unwrap();
+        store.add_child(d1, a1).unwrap();
+
+        let d2 = store.get_by_id::<Dwarf>(1).unwrap();
+        let a1_again = store.get_by_id::<Axe>(2).unwrap();
+        let a2 = store.get_by_id::<Axe>(3).unwrap();
+        let err = store.add_children(d2, &children![a1_again, a2]).unwrap_err();
+        assert_eq!(err, PicoError::AlreadyHasParent);
+
+        let d2 = store.get_by_id::<Dwarf>(1).unwrap();
+        assert_eq!(store.children(&d2).len(), 0);
+    }
+
+    #[test]
+    fn add_children_dead_entity_error() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "Gimli".into(),
+            health: 100,
+        });
+        store.add(&Axe {
+            damage: 45,
+            durability: 80,
+        });
+
+        let dead_parent_id = store.first::<Dwarf>().unwrap().id();
+        store.remove_by_id(dead_parent_id);
+        assert_eq!(
+            store.add_children_ids(dead_parent_id, &[1]),
+            Err(PicoError::EntityNotAlive)
+        );
+
+        store.add(&Dwarf {
+            name: "New parent".into(),
+            health: 100,
+        });
+        let new_parent_id = store.first::<Dwarf>().unwrap().id();
+        let err = store.add_children_ids(new_parent_id, &[dead_parent_id]);
+        assert_eq!(err, Err(PicoError::EntityNotAlive));
+    }
+
+    #[test]
+    fn add_children_all_or_nothing() {
+        let store = EntityStore::new();
+        store.add(&Dwarf {
+            name: "Gimli".into(),
+            health: 100,
+        });
+        store.add(&Dwarf {
+            name: "Thorin".into(),
+            health: 150,
+        });
+        store.add(&Axe {
+            damage: 45,
+            durability: 80,
+        });
+        store.add(&Axe {
+            damage: 60,
+            durability: 90,
+        });
+
+        let d1 = store.get_by_id::<Dwarf>(0).unwrap();
+        let a2 = store.get_by_id::<Axe>(3).unwrap();
+        store.add_child(d1, a2).unwrap();
+
+        let d2 = store.get_by_id::<Dwarf>(1).unwrap();
+        let a1 = store.get_by_id::<Axe>(2).unwrap();
+        let a2_again = store.get_by_id::<Axe>(3).unwrap();
+        let err = store.add_children(d2, &children![a1, a2_again]).unwrap_err();
+        assert_eq!(err, PicoError::AlreadyHasParent);
+
+        let d2 = store.get_by_id::<Dwarf>(1).unwrap();
+        assert_eq!(store.children(&d2).len(), 0);
+
+        let a1 = store.get_by_id::<Axe>(2).unwrap();
+        assert!(store.parent(&a1).is_none());
     }
 }

@@ -7,6 +7,7 @@ pub mod store;
 mod test;
 
 pub mod prelude {
+    pub use crate::children;
     pub use crate::entity_ref::EntityRef;
     pub use crate::refs::{Ref, RefMut};
     pub use crate::store::{EntityStore, PicoError};
