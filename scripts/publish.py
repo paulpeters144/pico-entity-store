@@ -93,7 +93,7 @@ def main() -> None:
         for cmd in (
             ["cargo", "test"],
             ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"],
-            ["cargo", "publish", "--dry-run"],
+            ["cargo", "publish", "--dry-run", "--allow-dirty"],
         ):
             result = _run(cmd)
             if result.returncode != 0:

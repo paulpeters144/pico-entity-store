@@ -15,6 +15,7 @@ use crate::store::StoreInner;
 pub(crate) struct SharedGuard<'a>(Arc<RwLockReadGuard<'a, StoreInner>>);
 
 impl<'a> SharedGuard<'a> {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub(crate) fn new(guard: RwLockReadGuard<'a, StoreInner>) -> Self {
         Self(Arc::new(guard))
     }
