@@ -1,5 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use pico_ecs::prelude::EntityStore;
+
+const ENTITY_COUNTS: &[usize] = &[1000, 10000];
+const BATCH_REMOVE_COUNT: usize = 1000;
+const SAMPLE_SIZE: usize = 100;
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -9,20 +13,13 @@ struct BenchmarkEntity {
     z: u64,
 }
 
-#[allow(dead_code)]
-#[derive(Clone)]
-struct OtherBenchmarkEntity {
-    a: u64,
-    b: u64,
-}
-
 fn bench_add(c: &mut Criterion) {
     let mut group = c.benchmark_group("add");
     group.warm_up_time(std::time::Duration::from_secs(1));
     group.measurement_time(std::time::Duration::from_secs(1));
-    group.sample_size(20);
+    group.sample_size(SAMPLE_SIZE);
 
-    for entity_count in [100, 1000] {
+    for &entity_count in ENTITY_COUNTS {
         group.bench_with_input(
             BenchmarkId::new("bulk", entity_count),
             &entity_count,
@@ -32,11 +29,11 @@ fn bench_add(c: &mut Criterion) {
                     |_| {
                         let store = EntityStore::new();
                         for i in 0..n {
-                            if i % 2 == 0 {
-                                store.add(&BenchmarkEntity { x: i as u64, y: 0, z: 0 });
-                            } else {
-                                store.add(&OtherBenchmarkEntity { a: i as u64, b: 0 });
-                            }
+                            store.add(&BenchmarkEntity {
+                                x: i as u64,
+                                y: 0,
+                                z: 0,
+                            });
                         }
                         store
                     },
@@ -53,15 +50,22 @@ fn bench_get_by_id(c: &mut Criterion) {
     let mut group = c.benchmark_group("get_by_id");
     group.warm_up_time(std::time::Duration::from_secs(1));
     group.measurement_time(std::time::Duration::from_secs(1));
-    group.sample_size(20);
+    group.sample_size(SAMPLE_SIZE);
 
-    for entity_count in [100, 1000] {
+    for &entity_count in ENTITY_COUNTS {
         let store = EntityStore::new();
-        let mut last_id = 0u64;
         for i in 0..entity_count {
-            store.add(&BenchmarkEntity { x: i as u64, y: 0, z: 0 });
-            last_id = i as u64;
+            store.add(&BenchmarkEntity {
+                x: i as u64,
+                y: 0,
+                z: 0,
+            });
         }
+        let last_id = store
+            .all::<BenchmarkEntity>()
+            .last()
+            .expect("should have entities")
+            .id();
 
         group.bench_with_input(
             BenchmarkId::new("single_lookup", entity_count),
@@ -81,16 +85,16 @@ fn bench_each(c: &mut Criterion) {
     let mut group = c.benchmark_group("each");
     group.warm_up_time(std::time::Duration::from_secs(1));
     group.measurement_time(std::time::Duration::from_secs(1));
-    group.sample_size(20);
+    group.sample_size(SAMPLE_SIZE);
 
-    for entity_count in [100, 1000] {
+    for &entity_count in ENTITY_COUNTS {
         let store = EntityStore::new();
         for i in 0..entity_count {
-            if i % 2 == 0 {
-                store.add(&BenchmarkEntity { x: i as u64, y: 0, z: 0 });
-            } else {
-                store.add(&OtherBenchmarkEntity { a: i as u64, b: 0 });
-            }
+            store.add(&BenchmarkEntity {
+                x: i as u64,
+                y: 0,
+                z: 0,
+            });
         }
 
         group.bench_with_input(
@@ -113,33 +117,50 @@ fn bench_remove(c: &mut Criterion) {
     let mut group = c.benchmark_group("remove");
     group.warm_up_time(std::time::Duration::from_secs(1));
     group.measurement_time(std::time::Duration::from_secs(1));
-    group.sample_size(20);
+    group.sample_size(SAMPLE_SIZE);
 
-    let remove_count = 100;
-
-    group.bench_function("batch_remove", |b| {
-        b.iter_batched(
-            || {
-                let store = EntityStore::new();
-                for i in 0..remove_count {
-                    store.add(&BenchmarkEntity { x: i as u64, y: 0, z: 0 });
-                }
-                store
+    for &entity_count in ENTITY_COUNTS {
+        group.bench_with_input(
+            BenchmarkId::new("batch_remove", entity_count),
+            &entity_count,
+            |b, &n| {
+                b.iter_batched(
+                    || {
+                        let store = EntityStore::new();
+                        for i in 0..n {
+                            store.add(&BenchmarkEntity {
+                                x: i as u64,
+                                y: 0,
+                                z: 0,
+                            });
+                        }
+                        store
+                    },
+                    |store| {
+                        let ids: Vec<u64> = store
+                            .all::<BenchmarkEntity>()
+                            .take(BATCH_REMOVE_COUNT)
+                            .map(|r| r.id())
+                            .collect();
+                        for id in ids {
+                            store.remove_by_id(id);
+                        }
+                        store
+                    },
+                    BatchSize::SmallInput,
+                );
             },
-            |store| {
-                let ids: Vec<u64> =
-                    store.all::<BenchmarkEntity>().map(|r| r.id()).collect();
-                for id in ids {
-                    store.remove_by_id(id);
-                }
-                store
-            },
-            BatchSize::SmallInput,
         );
-    });
+    }
 
     group.finish();
 }
 
-criterion_group!(benches, bench_add, bench_get_by_id, bench_each, bench_remove);
+criterion_group!(
+    benches,
+    bench_add,
+    bench_get_by_id,
+    bench_each,
+    bench_remove
+);
 criterion_main!(benches);
