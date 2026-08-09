@@ -1,3 +1,9 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
 # Rust / Cargo
 /target/
 **/*.rs.bk
