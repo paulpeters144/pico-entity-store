@@ -20,7 +20,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-pico-entity-store = "0.3"
+pico-entity-store = "0"
 ```
 
 ```rust
