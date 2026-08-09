@@ -1,5 +1,5 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
-use pico_ecs::prelude::EntityStore;
+use pico_entity_store::prelude::EntityStore;
 
 const ENTITY_COUNTS: &[usize] = &[1000, 10000];
 const BATCH_REMOVE_COUNT: usize = 100;
