@@ -353,21 +353,6 @@ fn readd_after_clear_works() {
 }
 
 #[test]
-fn is_alive_correct_before_and_after_remove() {
-    let store = EntityStore::new();
-    store.add(dwarf("Gimli", 100), &[]).unwrap();
-
-    let d = store.first::<Dwarf>().unwrap();
-    assert!(store.is_alive(&d));
-    let eref = d.entity_ref();
-    drop(d);
-
-    store.remove(&[eref]);
-    let d = store.get_by_id::<Dwarf>(eref.id());
-    assert!(d.is_none());
-}
-
-#[test]
 fn resolve_returns_none_for_wrong_type() {
     let store = EntityStore::new();
     store.add(dwarf("Gimli", 100), &[]).unwrap();

@@ -695,14 +695,6 @@ impl EntityStore {
 
         result
     }
-
-    // ── Liveness ──────────────────────────────────────────────────────────
-
-    /// Returns `true` if the entity is still alive in the store.
-    pub fn is_alive<T: 'static>(&self, entity: &Ref<T>) -> bool {
-        let guard = self.inner.read();
-        entity.id < guard.meta.len() && guard.meta[entity.id].alive
-    }
 }
 
 /// Collects [`ChildSource`](crate::store::ChildSource)s from

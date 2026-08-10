@@ -4,7 +4,7 @@
 [![docs.rs](https://docs.rs/pico-entity-store/badge.svg)](https://docs.rs/pico-entity-store)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE-MIT)
 
-A tiny, fast entity-component store for Rust. Store typed components per entity, query them by type, and build parent-child hierarchies — all with a simple, no-macro API.
+A tiny, fast entity-component store for Rust. Store typed components per entity, query them by type, and build parent-child hierarchies.
 
 ## Features
 
@@ -21,6 +21,46 @@ Add to your `Cargo.toml`:
 ```toml
 [dependencies]
 pico-entity-store = "0"
+```
+
+## Interface
+
+```rust
+impl EntityStore {
+    fn new() -> Self;
+    fn count(&self) -> usize;
+
+    // ── mutate ──
+    fn add<T: Clone + Send + Sync + 'static>(&self, target: impl IntoAdd<T>, children: &[ChildSource]) -> Result<EntityRef, PicoError>;
+    fn remove(&self, entities: &[EntityRef]);
+    fn clear(&self);
+
+    // ── read queries ──
+    fn first<T: 'static>(&self) -> Option<Ref<'_, T>>;
+    fn get_by_id<T: 'static>(&self, entity_id: u64) -> Option<Ref<'_, T>>;
+    fn all<T: 'static>(&self) -> RefVec<'_, T>;           // iterates &T
+
+    // ── write queries ──
+    fn first_mut<T: 'static>(&self) -> Option<RefMut<'_, T>>;
+    fn get_by_id_mut<T: 'static>(&self, entity_id: u64) -> Option<RefMut<'_, T>>;
+    fn all_mut<T: 'static>(&self) -> RefMutVec<'_, T>;    // iterates &mut T
+    fn update<T: 'static>(&self, entity_ref: &EntityRef, f: impl FnOnce(&mut T)) -> bool;
+
+    // ── hierarchy ──
+    fn parent<T: 'static>(&self, entity: &Ref<T>) -> Option<EntityRef>;
+    fn children<T: 'static>(&self, entity: &Ref<T>) -> Vec<EntityRef>;
+    fn descendants<T: 'static>(&self, entity: &Ref<T>) -> Vec<EntityRef>;
+}
+
+// types
+Ref<'a, T>            // read guard, derefs to &T
+RefMut<'a, T>         // write guard, derefs to &mut T
+RefVec<'a, T>         // read iterator over &T (ExactSizeIterator)
+RefMutVec<'a, T>      // write iterator over &mut T (ExactSizeIterator)
+EntityRef             // type-erased handle: Copy, Clone, Hash, Eq, Debug
+
+// error
+enum PicoError { TypeNotRegistered, AlreadyHasParent, EntityNotAlive }
 ```
 
 ```rust
@@ -154,16 +194,16 @@ assert_eq!(health.hp, 100);
 
 ### `EntityStore::all`
 
-Returns an iterator that yields `Ref<T>` read guards for all live entities of type `T`.
-The read lock is shared via `Arc` across all yielded guards, so iteration costs a single lock acquisition.
+Returns an iterator that yields `&T` references for all live entities of type `T`.
+A single read lock is held for the entire iteration.
 
 ```rust
 for pos in store.all::<Position>() {
-    println!("entity {} at ({}, {})", pos.id(), pos.x, pos.y);
+    println!("({}, {})", pos.x, pos.y);
 }
 
 // collect into a Vec
-let positions: Vec<_> = store.all::<Position>().collect();
+let positions: Vec<&Position> = store.all::<Position>().collect();
 ```
 
 ### `EntityStore::first_mut`
@@ -248,17 +288,6 @@ Returns all descendants (breadth-first traversal) of the entity as `Vec<EntityRe
 let parent = store.first::<Parent>().unwrap();
 let all_descendants = store.descendants(&parent);
 println!("total descendants: {}", all_descendants.len());
-```
-
-### `EntityStore::is_alive`
-
-Returns `true` if the entity's id is still alive in the store.
-
-```rust
-let guard = store.first::<Enemy>().unwrap();
-assert!(store.is_alive(&guard));
-store.remove(&[guard.entity_ref()]);
-assert!(!store.is_alive(&guard));
 ```
 
 ### `children!` macro
