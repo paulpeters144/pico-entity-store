@@ -16,10 +16,7 @@ fn main() {
     let store = EntityStore::new();
 
     let axe = Item { kind: "axe".into() };
-    let axe_ref = store.add(axe, &[]).unwrap();
-
     let gimli = Dwarf { name: "Gimli".into() };
-    let axe = store.get_by_id::<Item>(axe_ref.id()).unwrap();
     store.add(gimli, &children![axe]).unwrap();
 
     let axe = store.first::<Item>().unwrap();
