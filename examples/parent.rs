@@ -8,23 +8,24 @@ struct Dwarf {
 
 #[derive(Clone)]
 #[allow(dead_code)]
-struct Axe {
+struct Item {
     kind: String,
 }
 
 fn main() {
     let store = EntityStore::new();
 
-    let axe = Axe { kind: "Battleaxe".into() };
+    let axe = Item { kind: "axe".into() };
     let axe_ref = store.add(axe, &[]).unwrap();
 
     let gimli = Dwarf { name: "Gimli".into() };
-    let axe = store.get_by_id::<Axe>(axe_ref.id()).unwrap();
+    let axe = store.get_by_id::<Item>(axe_ref.id()).unwrap();
     store.add(gimli, &children![axe]).unwrap();
 
-    let axe = store.first::<Axe>().unwrap();
+    let axe = store.first::<Item>().unwrap();
 
     // prints: parent of Battleaxe: Gimli
-    let parent = store.get_by_id::<Dwarf>(store.parent(&axe).unwrap().id()).unwrap();
+    let parent_id = store.parent(&axe).unwrap().id();
+    let parent = store.get_by_id::<Dwarf>(parent_id).unwrap();
     println!("parent of {}: {}", axe.kind, parent.name);
 }
