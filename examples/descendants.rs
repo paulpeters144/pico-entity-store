@@ -8,21 +8,32 @@ struct Dwarf {
 
 #[derive(Clone)]
 #[allow(dead_code)]
-struct Axe {
-    kind: String,
+struct Inventory;
+
+#[derive(Clone)]
+#[allow(dead_code)]
+struct Item {
+    name: String,
 }
 
 fn main() {
     let store = EntityStore::new();
 
-    let dwarf = Dwarf { name: "Gimli".into() };
-    let axe = Axe { kind: "Axe".into() };
+    let inventory = Inventory;
+    let drink = Item { name: "ale".into() };
+    let food = Item { name: "apple".into() };
+    let map = Item { name: "map".into() };
+    let items = children![drink, food, map];
+    let inv_id = store.add(inventory, &items).unwrap().id();
 
-    store.add(dwarf, &children![axe]).unwrap();
+    let gimli = Dwarf { name: "Gimli".into() };
+    let axe = Item { name: "axe".into() };
+    let inv = store.get_by_id::<Inventory>(inv_id).unwrap();
+    store.add(gimli, &children![axe, inv]).unwrap();
 
-    let guard = store.first::<Dwarf>().unwrap();
+    let gimli = store.first::<Dwarf>().unwrap();
 
-    // prints: 1 descendant
-    let len = store.descendants(&guard).len();
-    println!("{} descendant", len);
+    // prints: 5 descendants
+    let len = store.descendants(&gimli).len();
+    println!("{} descendants", len);
 }
