@@ -37,6 +37,6 @@ pub mod store;
 pub mod prelude {
     pub use crate::children;
     pub use crate::entity_ref::EntityRef;
-    pub use crate::refs::{Ref, RefMut};
+    pub use crate::refs::{Ref, RefMut, RefMutVec, RefVec};
     pub use crate::store::{ChildSource, EntityStore, IntoChild, PicoError};
 }

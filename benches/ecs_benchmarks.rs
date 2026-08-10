@@ -125,7 +125,7 @@ fn bench_get_by_id(c: &mut Criterion) {
     for &entity_count in ENTITY_COUNTS {
         let store = EntityStore::new();
         add_entities_mixed(&store, entity_count);
-        let last_id = store.all::<BenchmarkEntity>().last().expect("should have entities").id();
+        let last_id = store.first::<BenchmarkEntity>().unwrap().id();
 
         group.bench_with_input(
             BenchmarkId::new("single_lookup", entity_count),
@@ -141,7 +141,7 @@ fn bench_get_by_id(c: &mut Criterion) {
     group.finish();
 }
 
-// ── all/collect (mixed store, collect by type — matches C# All(typeof(T))) ─
+// ── all/sum (mixed store, sum field by type — matches C# All(typeof(T))) ─
 
 fn bench_all(c: &mut Criterion) {
     let mut group = c.benchmark_group("all");
@@ -154,11 +154,15 @@ fn bench_all(c: &mut Criterion) {
         add_entities_mixed(&store, entity_count);
 
         group.bench_with_input(
-            BenchmarkId::new("collect", entity_count),
+            BenchmarkId::new("sum", entity_count),
             &entity_count,
             |b, _n| {
                 b.iter(|| {
-                    black_box(store.all::<BenchmarkEntity>().collect::<Vec<_>>());
+                    black_box(
+                        store
+                            .all::<BenchmarkEntity>()
+                            .fold(0u64, |acc, e| acc.wrapping_add(e.x)),
+                    );
                 });
             },
         );
@@ -238,10 +242,11 @@ fn bench_remove(c: &mut Criterion) {
                         store
                     },
                     |store| {
-                        let erefs: Vec<EntityRef> = store
-                            .all::<BenchmarkEntity>()
-                            .take(BATCH_REMOVE_COUNT)
-                            .map(|r| r.entity_ref())
+                        let erefs: Vec<EntityRef> = (0..BATCH_REMOVE_COUNT as u64)
+                            .map(|id| EntityRef::from_raw(
+                                id,
+                                std::any::TypeId::of::<BenchmarkEntity>(),
+                            ))
                             .collect();
                         store.remove(&erefs);
                         store

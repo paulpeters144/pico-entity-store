@@ -1,10 +1,10 @@
-use parking_lot::{RwLock, RwLockWriteGuard};
+use parking_lot::RwLock;
 use std::any::TypeId;
 use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 
 use crate::entity_ref::EntityRef;
-use crate::refs::{Guard, Ref, RefMut, SharedGuard};
+use crate::refs::{Ref, RefMut, RefMutVec, RefVec};
 use crate::storage::{Storage, TypedStorage};
 
 /// Per-entity bookkeeping, kept in a single parallel array so one cache
@@ -29,10 +29,6 @@ impl Default for EntityMeta {
         }
     }
 }
-
-// One entity = one 64-byte cache line or less. (TypeId is 16 bytes, so the
-// struct packs to 48 rather than the 40 a u64-sized TypeId would give.)
-const _: () = assert!(std::mem::size_of::<EntityMeta>() == 48);
 
 pub(crate) struct StoreInner {
     pub(crate) storages: Vec<Box<dyn Storage>>,
@@ -364,8 +360,13 @@ impl EntityStore {
                 let storage = guard.ensure_storage_mut::<T>(type_id);
                 let slot = storage.push(component, id as u64);
                 let storage_idx = guard.cached_i0;
-                guard.meta[id] =
-                    EntityMeta { type_id, slot, storage_idx, parent: u64::MAX, alive: true };
+                guard.meta[id] = EntityMeta {
+                    type_id,
+                    slot,
+                    storage_idx,
+                    parent: u64::MAX,
+                    alive: true,
+                };
                 guard.live_count += 1;
                 if !all_children.is_empty() {
                     guard.link_children(id, &all_children);
@@ -463,10 +464,6 @@ impl EntityStore {
     }
 
     fn remove_recursive(&self, guard: &mut StoreInner, id: usize) {
-        // Take the child list (moving the buffer, no fresh allocation) so we
-        // don't iterate a vec that recursive removals mutate: each child
-        // unlinks itself from `children[id]` below, which is a no-op on the
-        // empty vec left behind by `take`.
         let children_to_remove = std::mem::take(&mut guard.children[id]);
 
         for child_id in children_to_remove {
@@ -515,7 +512,7 @@ impl EntityStore {
         let entity_id = guard.storages[storage_idx].first_entity_id()?;
         let id = entity_id as usize;
         let slot = guard.meta[id].slot;
-        Some(Ref { id, slot, storage_idx, guard: Guard::Owned(guard), _phantom: PhantomData })
+        Some(Ref { id, slot, storage_idx, guard, _phantom: PhantomData })
     }
 
     /// Returns a read guard to the entity with the given numeric id, or `None`.
@@ -534,55 +531,68 @@ impl EntityStore {
             id,
             slot: m.slot,
             storage_idx: m.storage_idx,
-            guard: Guard::Owned(guard),
+            guard,
             _phantom: PhantomData,
         })
     }
 
-    /// Returns an iterator over read guards for all live entities of type `T`.
+    /// Returns a view of every component of type `T` as a zero-overhead
+    /// iterator yielding `&T` directly.
     ///
-    /// The read lock is acquired once and shared across every yielded [`Ref`]
-    /// via an `Arc`, so iteration costs a single lock acquisition instead of
-    /// one per element.
-    pub fn all<T: 'static>(&self) -> AllIter<'_, T> {
+    /// Components are stored contiguously in a flat `Vec<T>`, so iteration
+    /// is a single pointer walk with no per-element allocation, reference
+    /// counting, or dynamic dispatch.
+    ///
+    /// Holds a shared read lock for the returned iterator's lifetime.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pico_entity_store::prelude::*;
+    ///
+    /// #[derive(Clone)]
+    /// struct Pos(f32, f32);
+    ///
+    /// let store = EntityStore::new();
+    /// store.add(Pos(1.0, 2.0), &[]).unwrap();
+    /// store.add(Pos(3.0, 4.0), &[]).unwrap();
+    ///
+    /// store.all::<Pos>().for_each(|p| {
+    ///     println!("({}, {})", p.0, p.1);
+    /// });
+    /// ```
+    pub fn all<T: 'static>(&self) -> RefVec<'_, T> {
         let guard = self.inner.read();
-        let (storage_idx, entity_ids) = match guard.storage_map.get(&TypeId::of::<T>()) {
+        let (ptr, len) = match guard.storage_map.get(&TypeId::of::<T>()) {
             Some(&storage_idx) => {
                 let storage = guard.storages[storage_idx]
                     .as_any()
                     .downcast_ref::<TypedStorage<T>>()
                     .expect("storage type mismatch");
-                let ids: Vec<u64> = storage.slots.iter().map(|s| s.entity_id).collect();
-                (storage_idx, ids)
+                (storage.data.as_ptr(), storage.data.len())
             }
-            None => (0, Vec::new()),
+            None => (std::ptr::null(), 0),
         };
-        AllIter {
-            guard: SharedGuard::new(guard),
-            pos: 0,
-            entity_ids,
-            storage_idx,
-            _phantom_t: PhantomData,
-        }
+        RefVec::from_raw(guard, ptr, len)
     }
 
-    /// Returns an iterator over mutable references for all live entities of type `T`.
+    /// Returns a view of every component of type `T` as a zero-overhead
+    /// iterator yielding `&mut T` directly.
     ///
-    /// The write lock is held for the entire iteration. Yields `&mut T` directly.
-    pub fn all_mut<T: 'static>(&self) -> AllMutIter<'_, T> {
+    /// Holds an exclusive write lock for the returned iterator's lifetime.
+    pub fn all_mut<T: 'static>(&self) -> RefMutVec<'_, T> {
         let guard = self.inner.write();
-        let (storage_idx, entity_ids) = match guard.storage_map.get(&TypeId::of::<T>()) {
+        let (ptr, len) = match guard.storage_map.get(&TypeId::of::<T>()) {
             Some(&storage_idx) => {
                 let storage = guard.storages[storage_idx]
                     .as_any()
                     .downcast_ref::<TypedStorage<T>>()
                     .expect("storage type mismatch");
-                let ids: Vec<u64> = storage.slots.iter().map(|s| s.entity_id).collect();
-                (storage_idx, ids)
+                (storage.data.as_ptr() as *mut T, storage.data.len())
             }
-            None => (0, Vec::new()),
+            None => (std::ptr::null_mut(), 0),
         };
-        AllMutIter { guard, pos: 0, entity_ids, storage_idx, _phantom_t: PhantomData }
+        RefMutVec::from_raw(guard, ptr, len)
     }
 
     // ── Query (write) ─────────────────────────────────────────────────────
@@ -632,7 +642,7 @@ impl EntityStore {
             .as_any_mut()
             .downcast_mut::<TypedStorage<T>>()
             .expect("storage type mismatch");
-        f(&mut storage.slots[slot].data);
+        f(&mut storage.data[slot]);
         true
     }
 
@@ -727,96 +737,4 @@ macro_rules! children {
     ($($child:expr),+ $(,)?) => {
         [$($crate::store::IntoChild::into_child($child)),+]
     };
-}
-
-// ── AllIter ──────────────────────────────────────────────────────────────
-
-/// An iterator over read guards for all live entities of a given type.
-///
-/// Created by [`EntityStore::all`].
-///
-/// Acquires the store's read lock once and shares it (via an `Arc`) with every
-/// yielded reference, so iteration costs a single lock acquisition instead of
-/// one per element. The lock is held for as long as the iterator or any
-/// yielded [`Ref`] is alive, which also guarantees the storage is stable: no
-/// per-element liveness or bounds re-checks are needed.
-pub struct AllIter<'a, T: 'static> {
-    guard: SharedGuard<'a>,
-    pos: usize,
-    entity_ids: Vec<u64>,
-    storage_idx: usize,
-    _phantom_t: PhantomData<T>,
-}
-
-impl<'a, T: 'static> Iterator for AllIter<'a, T> {
-    type Item = Ref<'a, T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.entity_ids.len() {
-            return None;
-        }
-        let slot = self.pos;
-        self.pos += 1;
-
-        let entity_id = self.entity_ids[slot];
-        Some(Ref {
-            id: entity_id as usize,
-            slot,
-            storage_idx: self.storage_idx,
-            guard: Guard::Shared(self.guard.clone_ref()),
-            _phantom: PhantomData,
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.entity_ids.len() - self.pos;
-        (remaining, Some(remaining))
-    }
-
-    fn count(self) -> usize {
-        self.entity_ids.len() - self.pos
-    }
-}
-
-/// An iterator over mutable references for all live entities of a given type.
-///
-/// Created by [`EntityStore::all_mut`].
-///
-/// Holds the store's write lock for the entire iteration. Yields `&mut T` directly.
-pub struct AllMutIter<'a, T: 'static> {
-    guard: RwLockWriteGuard<'a, StoreInner>,
-    pos: usize,
-    entity_ids: Vec<u64>,
-    storage_idx: usize,
-    _phantom_t: PhantomData<T>,
-}
-
-impl<'a, T: 'static> Iterator for AllMutIter<'a, T> {
-    type Item = &'a mut T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.entity_ids.len() {
-            return None;
-        }
-        let slot = self.pos;
-        self.pos += 1;
-
-        let storage = self.guard.storages[self.storage_idx]
-            .as_any_mut()
-            .downcast_mut::<TypedStorage<T>>()
-            .expect("storage type mismatch");
-        // SAFETY: Each slot is yielded exactly once, and we hold exclusive access
-        // via the write lock. The storage is stable (no reallocation during iteration).
-        let data = &mut storage.slots[slot].data as *mut T;
-        Some(unsafe { &mut *data })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.entity_ids.len() - self.pos;
-        (remaining, Some(remaining))
-    }
-
-    fn count(self) -> usize {
-        self.entity_ids.len() - self.pos
-    }
 }

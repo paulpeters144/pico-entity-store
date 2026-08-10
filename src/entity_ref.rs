@@ -16,4 +16,12 @@ impl EntityRef {
     pub fn id(&self) -> u64 {
         self.id as u64
     }
+
+    /// Creates an `EntityRef` from a raw entity id and type.
+    ///
+    /// Useful when constructing references for removal or hierarchy
+    /// operations from raw entity id and type id.
+    pub fn from_raw(id: u64, type_id: TypeId) -> Self {
+        Self { id: id as usize, type_id }
+    }
 }

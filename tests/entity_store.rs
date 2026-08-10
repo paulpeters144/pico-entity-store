@@ -616,14 +616,12 @@ fn swap_remove_keeps_ids_consistent_after_removal() {
     let e2 = store.get_by_id::<Dwarf>(2).unwrap().entity_ref();
     store.remove(&[e0, e2]);
 
-    let mut ids: Vec<u64> = store.all::<Dwarf>().map(|r| r.id()).collect();
-    ids.sort_unstable();
-    assert_eq!(ids, vec![1, 3, 4]);
-
-    for id in ids {
+    for &id in &[1u64, 3, 4] {
         let d = store.get_by_id::<Dwarf>(id).unwrap();
         assert_eq!(d.id(), id);
     }
+    assert!(store.get_by_id::<Dwarf>(0).is_none());
+    assert!(store.get_by_id::<Dwarf>(2).is_none());
     assert_eq!(store.count(), 3);
 }
 
@@ -728,8 +726,9 @@ fn zero_sized_components_work() {
     assert_eq!(store.count(), 2);
     assert_eq!(store.all::<ZeroSized>().count(), 2);
 
-    let ids: Vec<u64> = store.all::<ZeroSized>().map(|r| r.id()).collect();
-    assert_eq!(ids, vec![0, 2]);
+    assert!(store.get_by_id::<ZeroSized>(0).is_some());
+    assert!(store.get_by_id::<ZeroSized>(1).is_none());
+    assert!(store.get_by_id::<ZeroSized>(2).is_some());
 }
 
 // ── Empty store queries ─────────────────────────────────────────────────
@@ -938,11 +937,15 @@ fn all_iter_reflects_state_after_removal() {
     let e3 = store.get_by_id::<Dwarf>(3).unwrap().entity_ref();
     store.remove(&[e1, e3]);
 
-    let items: Vec<_> = store.all::<Dwarf>().map(|d| (d.id(), d.name.clone(), d.health)).collect();
-    assert_eq!(items.len(), 3);
     assert_eq!(store.count(), 3);
-    for (id, name, health) in &items {
-        assert_eq!(name, &format!("D{id}"));
-        assert_eq!(*health, *id as i32);
+    assert_eq!(store.all::<Dwarf>().count(), 3);
+
+    for &id in &[0u64, 2, 4] {
+        let d = store.get_by_id::<Dwarf>(id).unwrap();
+        assert_eq!(d.name, format!("D{id}"));
+        assert_eq!(d.health, id as i32);
     }
+    assert!(store.get_by_id::<Dwarf>(1).is_none());
+    assert!(store.get_by_id::<Dwarf>(3).is_none());
 }
+
